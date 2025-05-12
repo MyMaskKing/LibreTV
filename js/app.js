@@ -938,8 +938,8 @@ function playVideo(url, vod_name, sourceCode, episodeIndex = 0) {
     // 构建播放页面URL，传递必要参数
     const playerUrl = `player.html?url=${encodeURIComponent(url)}&title=${encodeURIComponent(videoTitle)}&index=${episodeIndex}&source=${encodeURIComponent(sourceName)}&source_code=${encodeURIComponent(sourceCode)}`;
     
-    // 在当前标签页中打开播放页面
-    window.location.href = playerUrl;
+    // 修改为在新标签页中打开播放页面
+    window.open(playerUrl, '_blank');
 }
 
 // 播放上一集
