@@ -1,8 +1,8 @@
 // WebDAV 默认配置
 const DEFAULT_WEBDAV_CONFIG = {
-  url: 'https://alist.10023456.xyz/dav/share',
-  username: 'admin',
-  password: 'cyj123456'
+  url: 'https://alist.10023456.xyz/dav',
+  username: 'webdav',
+  password: 'webdav'
 };
 
 // WebDAV 客户端
