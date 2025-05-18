@@ -122,12 +122,20 @@ class WebDAVClient {
 // 同步管理器
 class SyncManager {
   constructor() {
-    this.webdavClient = null;
     this.syncEnabled = localStorage.getItem('cloudSyncEnabled') === 'true';
+    this.isSyncingFromCloud = false;
+    this.webdavClient = null;
     this.credentialId = localStorage.getItem('credentialId') || '';
     this.lastSyncTime = localStorage.getItem('lastSyncTime') || 0;
     this.syncInterval = 30 * 60 * 1000; // 30分钟同步一次
-    this.isSyncingFromCloud = false; // 添加同步标志
+    this.syncDebounceTimer = null;
+    this.syncInProgress = false;
+    this.syncStatusIcon = null;
+    this.isManualSync = false;
+
+    // 初始化
+    this.initSyncStatusIcon();
+    this.addStyles();
     this.setupEventListeners();
     this.initUI();
   }
@@ -155,47 +163,6 @@ class SyncManager {
       // 触发事件
       window.dispatchEvent(event);
     };
-  }
-
-  // 处理 localStorage 变化
-  handleStorageChange(event) {
-    // 如果正在从云端同步到本地，则不处理本地数据变化
-    if (this.isSyncingFromCloud || !this.syncEnabled) return;
-
-    // 只处理特定的键值变化
-    const syncKeys = [
-      'viewingHistory',
-      'selectedAPIs',
-      'customAPIs',
-      'yellowFilterEnabled',
-      'adFilteringEnabled',
-      'doubanEnabled',
-      'autoplayEnabled',
-      'userMovieTags',
-      'userTvTags'
-    ];
-
-    if (syncKeys.includes(event.key)) {
-      // 确保 WebDAV 客户端已初始化
-      if (!this.webdavClient && this.credentialId) {
-        this.webdavClient = new WebDAVClient(this.credentialId);
-      }
-
-      // 显示同步中的提示
-      showToast('正在同步数据到云端...', 'info');
-      
-      // 执行同步
-      this.syncToCloud().then(success => {
-        if (success) {
-          showToast('数据已成功同步到云端', 'success');
-        } else {
-          showToast('同步到云端失败，请检查网络连接', 'error');
-        }
-      }).catch(error => {
-        console.error('同步失败:', error);
-        showToast('同步到云端失败，请稍后重试', 'error');
-      });
-    }
   }
 
   // 初始化UI
@@ -281,7 +248,131 @@ class SyncManager {
     }
   }
 
-  // 初始化同步管理器
+  // 初始化同步状态图标
+  initSyncStatusIcon() {
+    // 创建同步状态图标
+    this.syncStatusIcon = document.createElement('div');
+    this.syncStatusIcon.id = 'syncStatusIcon';
+    this.syncStatusIcon.className = 'fixed bottom-4 right-4 p-2 rounded-full bg-gray-800 text-white opacity-0 transition-opacity duration-300';
+    this.syncStatusIcon.innerHTML = '🔄';
+    this.syncStatusIcon.style.zIndex = '1000';
+    document.body.appendChild(this.syncStatusIcon);
+  }
+
+  // 更新同步状态图标
+  updateSyncStatus(status) {
+    if (!this.syncStatusIcon) return;
+
+    switch (status) {
+      case 'syncing':
+        this.syncStatusIcon.style.opacity = '1';
+        this.syncStatusIcon.style.animation = 'spin 2s linear infinite';
+        break;
+      case 'success':
+        this.syncStatusIcon.style.opacity = '1';
+        this.syncStatusIcon.style.animation = 'none';
+        this.syncStatusIcon.innerHTML = '✅';
+        setTimeout(() => {
+          this.syncStatusIcon.style.opacity = '0';
+        }, 2000);
+        break;
+      case 'error':
+        this.syncStatusIcon.style.opacity = '1';
+        this.syncStatusIcon.style.animation = 'none';
+        this.syncStatusIcon.innerHTML = '❌';
+        setTimeout(() => {
+          this.syncStatusIcon.style.opacity = '0';
+        }, 2000);
+        break;
+      default:
+        this.syncStatusIcon.style.opacity = '0';
+        this.syncStatusIcon.style.animation = 'none';
+    }
+  }
+
+  // 防抖处理同步
+  debouncedSync() {
+    if (this.syncDebounceTimer) {
+      clearTimeout(this.syncDebounceTimer);
+    }
+
+    this.syncDebounceTimer = setTimeout(async () => {
+      if (this.syncInProgress) return;
+      
+      this.syncInProgress = true;
+      this.updateSyncStatus('syncing');
+      showToast('正在同步数据到云端...', 'info');
+
+      try {
+        // 确保 WebDAV 客户端已初始化
+        if (!this.webdavClient && this.credentialId) {
+          this.webdavClient = new WebDAVClient(this.credentialId);
+        }
+
+        const success = await this.syncToCloud();
+        if (success) {
+          this.updateSyncStatus('success');
+          showToast('数据已成功同步到云端', 'success');
+        } else {
+          this.updateSyncStatus('error');
+          showToast('同步到云端失败，请检查网络连接', 'error');
+        }
+      } catch (error) {
+        console.error('同步失败:', error);
+        this.updateSyncStatus('error');
+        showToast('同步到云端失败，请稍后重试', 'error');
+      } finally {
+        this.syncInProgress = false;
+      }
+    }, 3000); // 3秒防抖延迟
+  }
+
+  // 处理 localStorage 变化
+  handleStorageChange(event) {
+    // 如果正在从云端同步到本地，则不处理本地数据变化
+    if (this.isSyncingFromCloud || !this.syncEnabled) return;
+
+    // 只处理特定的键值变化
+    const syncKeys = [
+      'viewingHistory',
+      'selectedAPIs',
+      'customAPIs',
+      'yellowFilterEnabled',
+      'adFilteringEnabled',
+      'doubanEnabled',
+      'autoplayEnabled',
+      'userMovieTags',
+      'userTvTags'
+    ];
+
+    if (syncKeys.includes(event.key)) {
+      // 确保 WebDAV 客户端已初始化
+      if (!this.webdavClient && this.credentialId) {
+        this.webdavClient = new WebDAVClient(this.credentialId);
+      }
+
+      // 使用防抖处理同步
+      this.debouncedSync();
+    }
+  }
+
+  // 添加样式到页面
+  addStyles() {
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      #syncStatusIcon {
+        cursor: pointer;
+        user-select: none;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // 同步管理器
   async init(credentialId) {
     if (!credentialId) {
       console.error('初始化失败: 凭据ID为空');
