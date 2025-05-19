@@ -78,16 +78,11 @@ jobs:
         run: |
           echo "🔄 开始处理合并冲突..."
           
-          echo "🧹 清理当前合并状态..."
-          git merge --abort || true
+          # 先获取冲突文件列表
+          CONFLICT_FILES=$(git status --porcelain | grep "^UU" | cut -c4-)
           
-          echo "🔄 重新尝试合并以检测冲突..."
-          git merge --squash main || true
-
-          echo "🔍 检查冲突文件..."
-          CONFLICT_FILES=$(git diff --name-only --diff-filter=U || true)
           if [ -z "$CONFLICT_FILES" ]; then
-            echo "❌ 合并失败但没有检测到冲突文件，可能是其他错误"
+            echo "❌ 没有检测到冲突文件，可能是其他错误"
             echo "💡 当前git状态："
             git status
             exit 1
@@ -130,16 +125,29 @@ jobs:
             
             echo "💾 创建备份文件..."
             backup_file="${file}.$(date +%Y%m%d_%H%M%S).backup"
-            cp "$file" "$backup_file"
-            git add "$backup_file"
-            BACKUP_FILES="$BACKUP_FILES\n$backup_file"
+            cp "$file" "$backup_file" || echo "⚠️ 无法创建备份文件: $backup_file"
             
-            echo "📥 使用main分支版本..."
-            git checkout main -- "$file"
-            git add "$file"
-          done
+            if [ -f "$backup_file" ]; then
+              echo "✅ 备份文件创建成功: $backup_file"
+              BACKUP_FILES="${BACKUP_FILES}\n$backup_file"
+              
+              echo "📥 使用main分支版本..."
+              git checkout main -- "$file"
+              git add "$file"
+            fi
+          done <<< "$FILTERED_CONFLICT_FILES"
 
-          # 提交备份文件和main分支的更改
+          # 清理当前状态
+          git reset --hard HEAD
+          git clean -f -d
+          
+          # 重新检出 main 分支的内容
+          # git checkout main -- .
+          
+          # 恢复 workflow 文件
+          git checkout custom-dev -- .github/workflows/
+
+          # 提交更改
           echo "⚠️ 已备份冲突文件并使用main分支版本"
           git add -A
           git commit -m "同步main分支代码，并保存冲突文件备份"
