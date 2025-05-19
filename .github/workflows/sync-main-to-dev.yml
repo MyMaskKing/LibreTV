@@ -1,0 +1,221 @@
+name: 同步main到dev测试分支
+
+on:
+  # 只允许手动触发
+  workflow_dispatch:
+
+# 添加必要的权限
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  BACKUP_DIR: '.sync-backups'
+  TEMP_DIR: '.sync-temp'
+  BACKUP_RETAIN_DAYS: 7
+
+jobs:
+  sync-branches:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 配置Git
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          echo "✅ Git配置完成"
+      
+      - name: 第一步 - 合并main分支
+        id: merge
+        run: |
+          echo "🚀 开始同步main分支到custom-dev分支..."
+          
+          echo "📥 获取最新代码..."
+          git fetch origin
+          git fetch origin main:main
+          
+          echo "🔍 检查custom-dev分支状态..."
+          if ! git show-ref --verify --quiet refs/remotes/origin/custom-dev; then
+            echo "⚠️ custom-dev分支不存在，正在创建..."
+            git checkout -b custom-dev
+            echo "✅ custom-dev分支创建成功"
+          else
+            echo "✅ 切换到已存在的custom-dev分支"
+            git checkout custom-dev
+            echo "🔄 重置分支到最新状态"
+            git reset --hard origin/custom-dev
+          fi
+
+          echo "🧹 清理可能存在的合并状态..."
+          git merge --abort || true
+
+          echo "🔄 尝试合并main分支..."
+          if git merge main --no-commit; then
+            echo "✅ 合并成功"
+            git add -A
+            git commit -m "同步main分支代码"
+            git push --force origin custom-dev
+            exit 0
+          else
+            echo "合并发生冲突，进入第二步"
+            exit 1
+          fi
+
+      - name: 第二步 - 尝试自动合并
+        if: failure() && steps.merge.outcome == 'failure'
+        id: auto_merge
+        run: |
+          echo "🔄 开始尝试自动解决冲突..."
+          
+          echo "🧹 清理当前合并状态..."
+          git merge --abort || true
+
+          echo "🔧 安装必要工具..."
+          sudo apt-get update
+          sudo apt-get install -y diffutils
+
+          echo "🔄 重新尝试合并以检测冲突..."
+          git merge main || true
+
+          echo "🔍 检查冲突文件..."
+          CONFLICT_FILES=$(git diff --name-only --diff-filter=U || true)
+          if [ -z "$CONFLICT_FILES" ]; then
+            echo "❌ 合并失败但没有检测到冲突文件，可能是其他错误"
+            echo "💡 当前git状态："
+            git status
+            exit 1
+          fi
+
+          echo "📝 发现以下冲突文件："
+          echo "$CONFLICT_FILES"
+          
+          echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
+          echo "$CONFLICT_FILES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          MERGE_SUCCESS=true
+          BACKUP_FILES=""
+          
+          for file in $CONFLICT_FILES; do
+            echo "🔄 处理文件: $file"
+            
+            # 检查文件是否存在
+            if [ ! -f "$file" ]; then
+              echo "⚠️ 警告：文件 $file 不存在，跳过"
+              continue
+            fi
+            
+            echo "📑 获取文件版本信息..."
+            BASE=$(git merge-base HEAD main)
+            git show $BASE:$file > base.tmp || touch base.tmp
+            git show HEAD:$file > ours.tmp || touch ours.tmp
+            git show main:$file > theirs.tmp || touch theirs.tmp
+            
+            echo "🔄 尝试三方合并..."
+            if diff3 -m ours.tmp base.tmp theirs.tmp > merged.tmp 2>/dev/null; then
+              if ! grep -q '<<<<<<<' merged.tmp; then
+                echo "✅ 文件 $file 自动合并成功"
+                mv merged.tmp "$file"
+                git add "$file"
+                continue
+              fi
+            fi
+            
+            echo "⚠️ 文件 $file 自动合并失败"
+            MERGE_SUCCESS=false
+            
+            echo "💾 创建备份文件..."
+            backup_file="${file}.$(date +%Y%m%d_%H%M%S).backup"
+            cp "$file" "$backup_file"
+            git add "$backup_file"
+            BACKUP_FILES="$BACKUP_FILES\n$backup_file"
+            
+            echo "📥 使用main分支版本..."
+            git checkout main -- "$file"
+            git add "$file"
+          done
+
+          echo "🧹 清理临时文件..."
+          rm -f *.tmp
+
+          if [ "$MERGE_SUCCESS" = true ]; then
+            echo "✅ 所有文件自动合并成功"
+            git add -A
+            git commit -m "同步main分支代码"
+            git push --force origin custom-dev
+            exit 0
+          else
+            # 提交备份文件和main分支的更改
+            echo "⚠️ 部分文件无法自动合并，已创建备份"
+            git add -A
+            git commit -m "同步main分支代码，并保存冲突文件备份"
+            git push --force origin custom-dev
+            
+            echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
+            echo -e "$BACKUP_FILES" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            
+            echo "📋 创建Issue报告冲突情况..."
+            exit 1
+          fi
+
+      - name: 第三步 - 使用main代码并创建Issue
+        if: failure() && steps.auto_merge.outcome == 'failure'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            console.log('📝 正在创建同步冲突报告...');
+            
+            const issueBody = `
+            # main -> custom-dev 同步冲突报告
+            
+            在同步过程中发现以下文件存在冲突，已自动使用main分支的代码并备份原文件。
+            
+            ## 冲突文件列表
+            \`\`\`
+            ${process.env.CONFLICT_FILES}
+            \`\`\`
+            
+            ## 备份文件
+            已在每个冲突文件的同目录下创建备份文件：
+            \`\`\`
+            ${process.env.BACKUP_FILES}
+            \`\`\`
+            
+            ## 处理说明
+            1. 所有冲突文件已使用main分支的版本
+            2. custom-dev分支的原始代码已在同目录下备份
+            3. 如需恢复或合并自定义代码，请参考备份文件
+            
+            ## 手动处理步骤
+            1. 检查备份文件内容
+            2. 如需修改，请在custom-dev分支上进行更改
+            3. 确保更改后的代码与main分支的改动不冲突
+            `;
+            
+            console.log('📤 提交Issue...');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🔄 main -> custom-dev 同步冲突报告',
+              body: issueBody,
+              labels: ['sync-conflict']
+            });
+            console.log('✅ Issue创建成功');
+
+      - name: Cleanup temp files
+        if: always()
+        run: |
+          rm -rf $TEMP_DIR
+          echo "🧹 清理临时文件完成"
+      
+      - name: Notify result
+        run: |
+          echo "✅ 同步流程已完成。请检查 custom-dev 分支，如有 .backup 文件请手动 diff 并处理。" 

@@ -1,0 +1,88 @@
+name: 发布Beta版本
+
+on:
+  # 只允许手动触发
+  workflow_dispatch:
+
+# 添加必要的权限
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  sync-to-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Git
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+      
+      - name: Force sync custom-dev to custom-features-middle
+        run: |
+          echo "🔄 开始同步流程..."
+          
+          # 获取最新代码
+          git fetch origin
+          
+          # 检查 custom-features-middle 分支是否存在
+          if ! git show-ref --verify --quiet refs/remotes/origin/custom-features-middle; then
+            echo "🌱 创建测试分支 custom-features-middle..."
+            git checkout -b custom-features-middle
+            git push -u origin custom-features-middle
+          fi
+          
+          # 强制更新测试分支
+          echo "🔄 强制更新测试分支..."
+          git checkout custom-features-middle
+          git reset --hard origin/custom-dev
+          git push -f origin custom-features-middle
+          
+          echo "✅ 同步完成：已将 custom-dev 的内容强制同步到测试分支"
+      
+      - name: Create issue on failure
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const issueBody = `
+            # 测试分支同步失败
+            
+            在将开发分支同步到测试分支时发生错误。
+            
+            ## 详细信息
+            - 工作流运行: [查看运行记录](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+            - 时间: ${new Date().toISOString()}
+            
+            ## 分支信息
+            - 源分支: \`custom-dev\` (开发分支)
+            - 目标分支: \`custom-features-middle\` (测试分支)
+            
+            ## 注意事项
+            这是强制同步操作，如果同步失败，请检查：
+            1. 是否有足够的权限
+            2. 分支保护规则是否允许强制推送
+            3. 网络连接是否正常
+            `;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🔄 测试分支同步失败',
+              body: issueBody,
+              labels: ['sync-failed', 'needs-attention']
+            });
+      
+      - name: Notify success
+        if: success()
+        run: |
+          echo "✅ 测试分支同步成功"
+          echo "custom-dev -> custom-features-middle" 
