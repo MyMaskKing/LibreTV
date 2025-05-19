@@ -1120,6 +1120,36 @@ function closeVideoPlayer() {
             document.getElementById('doubanArea').classList.remove('hidden');
         }
     }
+    
+    // 保存当前状态到localStorage，让播放页面可以获取
+    const currentVideoTitle = vod_name;
+    localStorage.setItem('currentVideoTitle', currentVideoTitle);
+    localStorage.setItem('currentEpisodeIndex', episodeIndex);
+    localStorage.setItem('currentEpisodes', JSON.stringify(currentEpisodes));
+    localStorage.setItem('episodesReversed', episodesReversed);
+    
+    // 构建视频信息对象，使用标题作为唯一标识
+    const videoTitle = vod_name || currentVideoTitle;
+    const videoInfo = {
+        title: videoTitle,
+        url: url,
+        episodeIndex: episodeIndex,
+        sourceName: sourceName,
+        timestamp: Date.now(),
+        // 重要：将完整的剧集信息也添加到历史记录中
+        episodes: currentEpisodes && currentEpisodes.length > 0 ? [...currentEpisodes] : []
+    };
+    
+    // 保存到观看历史，添加sourceName
+    if (typeof addToViewingHistory === 'function') {
+        addToViewingHistory(videoInfo);
+    }
+    
+    // 构建播放页面URL，传递必要参数
+    const playerUrl = `player.html?url=${encodeURIComponent(url)}&title=${encodeURIComponent(videoTitle)}&index=${episodeIndex}&source=${encodeURIComponent(sourceName)}&source_code=${encodeURIComponent(sourceCode)}`;
+    
+    // 修改为在新标签页中打开播放页面
+    window.open(playerUrl, '_blank');
 }
 
 // 播放上一集
