@@ -56,45 +56,33 @@ jobs:
           echo "🧹 清理可能存在的合并状态..."
           git merge --abort || true
 
-          echo "🔄 尝试合并main分支，排除workflow文件..."
-          # 保存当前的workflow文件
-          mkdir -p .workflow-backup
-          cp -r .github/workflows/* .workflow-backup/
-          
-          # 尝试合并，但排除workflow文件
-          if git merge main --no-commit; then
-            # 恢复原有的workflow文件
-            cp -r .workflow-backup/* .github/workflows/
-            rm -rf .workflow-backup
+          echo "🔄 尝试合并main分支..."
+          if git merge --squash main --no-commit; then
+            echo "🔄 排除 workflow 文件..."
+            git restore --staged .github/workflows/
+            git restore .github/workflows/
             
             echo "✅ 合并成功"
             git add -A
-            git commit -m "同步main分支代码（保留原有workflow配置）"
+            git commit -m "同步main分支代码"
             git push --force origin custom-dev
             exit 0
           else
-            # 合并失败时也要恢复workflow文件
-            cp -r .workflow-backup/* .github/workflows/
-            rm -rf .workflow-backup
             echo "合并发生冲突，进入第二步"
             exit 1
           fi
 
-      - name: 第二步 - 尝试自动合并
+      - name: 第二步 - 备份冲突文件并使用main版本
         if: failure() && steps.merge.outcome == 'failure'
         id: auto_merge
         run: |
-          echo "🔄 开始尝试自动解决冲突..."
+          echo "🔄 开始处理合并冲突..."
           
           echo "🧹 清理当前合并状态..."
           git merge --abort || true
-
-          echo "🔧 安装必要工具..."
-          sudo apt-get update
-          sudo apt-get install -y diffutils
-
+          
           echo "🔄 重新尝试合并以检测冲突..."
-          git merge main || true
+          git merge --squash main || true
 
           echo "🔍 检查冲突文件..."
           CONFLICT_FILES=$(git diff --name-only --diff-filter=U || true)
@@ -124,7 +112,6 @@ jobs:
           echo -e "$CONFLICT_FILES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
-          MERGE_SUCCESS=true
           BACKUP_FILES=""
           
           # 处理每个冲突文件
@@ -141,25 +128,6 @@ jobs:
               continue
             fi
             
-            echo "📑 获取文件版本信息..."
-            BASE=$(git merge-base HEAD main)
-            git show $BASE:$file > base.tmp || touch base.tmp
-            git show HEAD:$file > ours.tmp || touch ours.tmp
-            git show main:$file > theirs.tmp || touch theirs.tmp
-            
-            echo "🔄 尝试三方合并..."
-            if diff3 -m ours.tmp base.tmp theirs.tmp > merged.tmp 2>/dev/null; then
-              if ! grep -q '<<<<<<<' merged.tmp; then
-                echo "✅ 文件 $file 自动合并成功"
-                mv merged.tmp "$file"
-                git add "$file"
-                continue
-              fi
-            fi
-            
-            echo "⚠️ 文件 $file 自动合并失败"
-            MERGE_SUCCESS=false
-            
             echo "💾 创建备份文件..."
             backup_file="${file}.$(date +%Y%m%d_%H%M%S).backup"
             cp "$file" "$backup_file"
@@ -171,31 +139,20 @@ jobs:
             git add "$file"
           done
 
-          echo "🧹 清理临时文件..."
-          rm -f *.tmp
+          # 提交备份文件和main分支的更改
+          echo "⚠️ 已备份冲突文件并使用main分支版本"
+          git add -A
+          git commit -m "同步main分支代码，并保存冲突文件备份"
+          git push --force origin custom-dev
+          
+          echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
+          echo -e "$BACKUP_FILES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          
+          echo "📋 创建Issue报告冲突情况..."
+          exit 1
 
-          if [ "$MERGE_SUCCESS" = true ]; then
-            echo "✅ 所有文件自动合并成功"
-            git add -A
-            git commit -m "同步main分支代码"
-            git push --force origin custom-dev
-            exit 0
-          else
-            # 提交备份文件和main分支的更改
-            echo "⚠️ 部分文件无法自动合并，已创建备份"
-            git add -A
-            git commit -m "同步main分支代码，并保存冲突文件备份"
-            git push --force origin custom-dev
-            
-            echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
-            echo -e "$BACKUP_FILES" >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
-            
-            echo "📋 创建Issue报告冲突情况..."
-            exit 1
-          fi
-
-      - name: 第三步 - 使用main代码并创建Issue
+      - name: 第三步 - 创建Issue报告
         if: failure() && steps.auto_merge.outcome == 'failure'
         uses: actions/github-script@v6
         with:
