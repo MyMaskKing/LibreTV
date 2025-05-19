@@ -893,30 +893,6 @@ function playEpisode(index) {
     currentEpisodeIndex = index;
     videoHasEnded = false; // 重置视频结束标志
     
-<<<<<<< HEAD
-    // 获取当前URL参数，保留source参数
-    const urlParams = new URL(window.location.href);
-    const sourceName = urlParams.searchParams.get('source') || ''; // Use searchParams
-    const sourceCode = urlParams.searchParams.get('source_code') || ''; // Use searchParams
-    
-    // 更新URL，不刷新页面，保留source参数
-    const newUrl = new URL(window.location.href);
-    newUrl.searchParams.set('index', index);
-    newUrl.searchParams.set('url', url);
-    if (sourceName) {
-        newUrl.searchParams.set('source', sourceName);
-    }
-    if (sourceCode) {
-        newUrl.searchParams.set('source_code', sourceCode);
-    }
-    
-    // 保留referrer参数，如果存在
-    const referrer = urlParams.searchParams.get('referrer'); // Use searchParams
-    if (referrer) {
-        newUrl.searchParams.set('referrer', referrer);
-    }
-    
-=======
     // 获取当前URL的所有参数
     const currentUrl = new URL(window.location.href);
     const urlParams = currentUrl.searchParams;
@@ -936,7 +912,6 @@ function playEpisode(index) {
     newUrl.searchParams.set('url', url);
     
     // 使用replaceState更新URL，这样不会增加浏览历史记录
->>>>>>> main
     window.history.replaceState({}, '', newUrl);
     
     // 更新播放器
