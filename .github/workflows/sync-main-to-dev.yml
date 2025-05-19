@@ -9,6 +9,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  workflows: write
 
 env:
   BACKUP_DIR: '.sync-backups'
@@ -56,14 +57,26 @@ jobs:
           echo "🧹 清理可能存在的合并状态..."
           git merge --abort || true
 
-          echo "🔄 尝试合并main分支..."
+          echo "🔄 尝试合并main分支，排除workflow文件..."
+          # 保存当前的workflow文件
+          mkdir -p .workflow-backup
+          cp -r .github/workflows/* .workflow-backup/
+          
+          # 尝试合并，但排除workflow文件
           if git merge main --no-commit; then
+            # 恢复原有的workflow文件
+            cp -r .workflow-backup/* .github/workflows/
+            rm -rf .workflow-backup
+            
             echo "✅ 合并成功"
             git add -A
-            git commit -m "同步main分支代码"
+            git commit -m "同步main分支代码（保留原有workflow配置）"
             git push --force origin custom-dev
             exit 0
           else
+            # 合并失败时也要恢复workflow文件
+            cp -r .workflow-backup/* .github/workflows/
+            rm -rf .workflow-backup
             echo "合并发生冲突，进入第二步"
             exit 1
           fi
@@ -93,7 +106,16 @@ jobs:
             exit 1
           fi
 
-          echo "📝 发现以下冲突文件："
+          # 过滤掉 workflow 文件
+          FILTERED_CONFLICT_FILES=""
+          for file in $CONFLICT_FILES; do
+            if [[ $file != .github/workflows/* ]]; then
+              FILTERED_CONFLICT_FILES="$FILTERED_CONFLICT_FILES\n$file"
+            fi
+          done
+          CONFLICT_FILES="$FILTERED_CONFLICT_FILES"
+
+          echo "📝 发现以下冲突文件（已排除workflow文件）："
           echo "$CONFLICT_FILES"
           
           echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
