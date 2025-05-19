@@ -26,27 +26,27 @@ jobs:
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
       
-      - name: Force sync custom-dev to custom-features-middle
+      - name: Force sync custom-dev to custom-features
         run: |
           echo "🔄 开始同步流程..."
           
           # 获取最新代码
           git fetch origin
           
-          # 检查 custom-features-middle 分支是否存在
-          if ! git show-ref --verify --quiet refs/remotes/origin/custom-features-middle; then
-            echo "🌱 创建测试分支 custom-features-middle..."
-            git checkout -b custom-features-middle
-            git push -u origin custom-features-middle
+          # 检查 custom-features 分支是否存在
+          if ! git show-ref --verify --quiet refs/remotes/origin/custom-features; then
+            echo "🌱 创建功能分支 custom-features..."
+            git checkout -b custom-features
+            git push -u origin custom-features
           fi
           
-          # 强制更新测试分支
-          echo "🔄 强制更新测试分支..."
-          git checkout custom-features-middle
+          # 强制更新功能分支
+          echo "🔄 强制更新功能分支..."
+          git checkout custom-features
           git reset --hard origin/custom-dev
-          git push -f origin custom-features-middle
+          git push -f origin custom-features
           
-          echo "✅ 同步完成：已将 custom-dev 的内容强制同步到测试分支"
+          echo "✅ 同步完成：已将 custom-dev 的内容强制同步到功能分支"
       
       - name: Create issue on failure
         if: failure()
@@ -54,9 +54,9 @@ jobs:
         with:
           script: |
             const issueBody = `
-            # 测试分支同步失败
+            # 功能分支同步失败
             
-            在将开发分支同步到测试分支时发生错误。
+            在将开发分支同步到功能分支时发生错误。
             
             ## 详细信息
             - 工作流运行: [查看运行记录](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
@@ -64,7 +64,7 @@ jobs:
             
             ## 分支信息
             - 源分支: \`custom-dev\` (开发分支)
-            - 目标分支: \`custom-features-middle\` (测试分支)
+            - 目标分支: \`custom-features\` (功能分支)
             
             ## 注意事项
             这是强制同步操作，如果同步失败，请检查：
@@ -76,7 +76,7 @@ jobs:
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: '🔄 测试分支同步失败',
+              title: '🔄 功能分支同步失败',
               body: issueBody,
               labels: ['sync-failed', 'needs-attention']
             });
@@ -84,5 +84,5 @@ jobs:
       - name: Notify success
         if: success()
         run: |
-          echo "✅ 测试分支同步成功"
-          echo "custom-dev -> custom-features-middle" 
+          echo "✅ 功能分支同步成功"
+          echo "custom-dev -> custom-features" 
