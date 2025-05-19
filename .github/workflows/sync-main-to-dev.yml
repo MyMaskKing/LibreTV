@@ -137,18 +137,24 @@ jobs:
             fi
           done <<< "$FILTERED_CONFLICT_FILES"
 
+          # 先提交备份文件
+          echo "💾 提交备份文件..."
+          git add -A
+          git commit -m "备份冲突文件" || true
+          
           # 清理当前状态
           git reset --hard HEAD
           git clean -f -d
           
-          # 重新检出 main 分支的内容
-          # git checkout main -- .
+          # 获取 main 分支的所有更改
+          echo "📥 同步 main 分支的所有更改..."
+          git checkout main -- .
           
           # 恢复 workflow 文件
           git checkout custom-dev -- .github/workflows/
 
-          # 提交更改
-          echo "⚠️ 已备份冲突文件并使用main分支版本"
+          # 提交main分支更改
+          echo "⚠️ 已同步main分支代码并保存了冲突文件备份"
           git add -A
           git commit -m "同步main分支代码，并保存冲突文件备份"
           git push --force origin custom-dev
