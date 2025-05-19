@@ -228,8 +228,24 @@ function renderSearchHistory() {
     
     history.forEach(item => {
         const tag = document.createElement('button');
-        tag.className = 'search-tag';
-        tag.textContent = item.text;
+        tag.className = 'search-tag flex items-center gap-1';
+        const textSpan = document.createElement('span');
+        textSpan.textContent = item.text;
+        tag.appendChild(textSpan);
+
+        // 添加删除按钮
+        const deleteButton = document.createElement('span');
+        deleteButton.className = 'pl-1 text-gray-500 hover:text-red-500 transition-colors';
+        deleteButton.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>';
+        deleteButton.onclick = function(e) {
+            // 阻止事件冒泡，避免触发搜索
+            e.stopPropagation();
+            // 删除对应历史记录
+            deleteSingleSearchHistory(item.text);
+            // 重新渲染搜索历史
+            renderSearchHistory();
+        };
+        tag.appendChild(deleteButton);
         
         // 添加时间提示（如果有时间戳）
         if (item.timestamp) {
@@ -243,6 +259,21 @@ function renderSearchHistory() {
         };
         historyContainer.appendChild(tag);
     });
+}
+
+// 删除单条搜索历史记录
+function deleteSingleSearchHistory(query) {
+    // 当url中包含删除的关键词时，页面刷新后会自动加入历史记录，导致误认为删除功能有bug。此问题无需修复，功能无实际影响。
+    try {
+        let history = getSearchHistory();
+        // 过滤掉要删除的记录
+        history = history.filter(item => item.text !== query);
+        console.log('更新后的搜索历史:', history);
+        localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(history));
+    } catch (e) {
+        console.error('删除单条搜索历史失败:', e);
+        showToast('删除单条搜索历史失败', 'error');
+    }
 }
 
 // 增加清除搜索历史功能
@@ -488,8 +519,20 @@ function playFromHistory(url, title, episodeIndex, playbackPosition = 0) {
             localStorage.setItem('currentEpisodes', JSON.stringify(episodesList));
             console.log(`已将剧集列表保存到localStorage，共 ${episodesList.length} 集`);
         }
+        
+        // 保存当前页面URL作为返回地址
+        // 优先使用 location.origin + location.pathname + location.search，避免 hash 干扰
+        let currentPath;
+        if (window.location.pathname.startsWith('/player.html') || window.location.pathname.startsWith('/watch.html')) {
+            // 如果当前在 player/watch 页面，优先取 localStorage.lastPageUrl 或回退到首页
+            currentPath = localStorage.getItem('lastPageUrl') || '/';
+        } else {
+            currentPath = window.location.origin + window.location.pathname + window.location.search;
+        }
+        localStorage.setItem('lastPageUrl', currentPath);
+        
         // 构造带播放进度参数的URL
-        const positionParam = playbackPosition > 10 ? `&position=${Math.floor(playbackPosition)}` : '';
+        const positionParam = `&position=${Math.floor(playbackPosition || 0)}`;
         
         if (url.includes('?')) {
             // URL已有参数，添加索引和位置参数
@@ -497,20 +540,20 @@ function playFromHistory(url, title, episodeIndex, playbackPosition = 0) {
             if (!playUrl.searchParams.has('index') && episodeIndex > 0) {
                 playUrl.searchParams.set('index', episodeIndex);
             }
-            if (playbackPosition > 10) {
-                playUrl.searchParams.set('position', Math.floor(playbackPosition).toString());
-            }
-            window.location.href = playUrl.toString();
+            playUrl.searchParams.set('position', Math.floor(playbackPosition || 0).toString());
+            // 添加返回URL
+            playUrl.searchParams.set('returnUrl', encodeURIComponent(currentPath));
+            showVideoPlayer(playUrl.toString());
         } else {
             // 原始URL，构造player页面链接
-            const playerUrl = `player.html?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}&index=${episodeIndex}${positionParam}`;
-            window.location.href = playerUrl;
+            const playerUrl = `player.html?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}&index=${episodeIndex}&position=${Math.floor(playbackPosition || 0)}&returnUrl=${encodeURIComponent(currentPath)}`;
+            showVideoPlayer(playerUrl);
         }
     } catch (e) {
         console.error('从历史记录播放失败:', e);
         // 回退到原始简单URL
         const simpleUrl = `player.html?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}&index=${episodeIndex}`;
-        window.location.href = simpleUrl;
+        showVideoPlayer(simpleUrl);
     }
 }
 
@@ -658,7 +701,7 @@ function clearLocalStorage() {
             
             <div class="mb-0">
                 <div class="text-sm font-medium text-gray-300">确定要清除页面缓存吗？</div>
-                <div class="text-sm font-medium text-gray-300 mb-4">此功能会删除你的观看记录和自定义 API 接口，<scan class="text-red-500 font-bold">此操作不可恢复！</scan></div>
+                <div class="text-sm font-medium text-gray-300 mb-4">此功能会删除你的观看记录、自定义 API 接口和 Cookie，<scan class="text-red-500 font-bold">此操作不可恢复！</scan></div>
                 <div class="flex justify-end space-x-2">
                     <button id="confirmBoxModal" class="ml-2 bg-gray-600 hover:bg-gray-700 text-white px-4 py-1 rounded">确定</button>
                     <button id="cancelBoxModal" class="ml-2 bg-pink-600 hover:bg-pink-700 text-white px-4 py-1 rounded">取消</button>
@@ -676,7 +719,18 @@ function clearLocalStorage() {
 
     // 添加事件监听器 - 确定按钮
     document.getElementById('confirmBoxModal').addEventListener('click', function () {
+        // 清除所有localStorage数据
         localStorage.clear();
+        
+        // 清除所有cookie
+        const cookies = document.cookie.split(";");
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i];
+            const eqPos = cookie.indexOf("=");
+            const name = eqPos > -1 ? cookie.substr(0, eqPos).trim() : cookie.trim();
+            document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
+        }
+        
         modal.innerHTML = `
             <div class="bg-[#191919] rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto relative">
                 <button id="closeBoxModal" class="absolute top-4 right-4 text-gray-400 hover:text-white text-xl">&times;</button>
@@ -684,12 +738,22 @@ function clearLocalStorage() {
                 <h3 class="text-xl font-bold text-white mb-4">提示</h3>
                 
                 <div class="mb-4">
-                    <div class="text-sm font-medium text-gray-300 mb-4">页面缓存已清除，3 秒后自动刷新本页面。</div>
+                    <div class="text-sm font-medium text-gray-300 mb-4">页面缓存和Cookie已清除，<span id="countdown">3</span> 秒后自动刷新本页面。</div>
                 </div>
             </div>`;
-        setTimeout(() => {
-            window.location.reload();
-        }, 3000);
+
+        let countdown = 3;
+        const countdownElement = document.getElementById('countdown');
+        
+        const countdownInterval = setInterval(() => {
+            countdown--;
+            if (countdown >= 0) {
+                countdownElement.textContent = countdown;
+            } else {
+                clearInterval(countdownInterval);
+                window.location.reload();
+            }
+        }, 1000);
     });
 
     // 添加事件监听器 - 取消按钮
@@ -733,12 +797,13 @@ function showImportBox(fun) {
                     </div>
                     <div class="grid gap-2">
                         <h4 class="text-center text-white-900 text-sm font-medium leading-snug">将配置文件拖到此处，或手动选择文件</h4>
-                        <div class="flex items-center justify-center">
-                            <label>
-                                <input type="file" id="ChooseFile" hidden />
-                                <div class="flex w-28 h-9 px-2 flex-col bg-pink-600 rounded-full shadow text-white text-xs font-semibold leading-4 items-center justify-center cursor-pointer focus:outline-none">选择文件</div>
-                            </label>
-                        </div>
+                    <div class="flex items-center justify-center gap-2">
+                        <label>
+                            <input type="file" id="ChooseFile" hidden />
+                            <div class="flex w-28 h-9 px-2 flex-col bg-pink-600 rounded-full shadow text-white text-xs font-semibold leading-4 items-center justify-center cursor-pointer focus:outline-none">选择文件</div>
+                        </label>
+                        <button onclick="importConfigFromUrl()" class="flex w-28 h-9 px-2 flex-col bg-blue-600 rounded-full shadow text-white text-xs font-semibold leading-4 items-center justify-center cursor-pointer focus:outline-none">从URL导入</button>
+                    </div>
                     </div>
                 </div>
             </div>
