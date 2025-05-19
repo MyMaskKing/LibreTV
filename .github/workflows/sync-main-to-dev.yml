@@ -105,26 +105,34 @@ jobs:
             exit 1
           fi
 
-          # 过滤掉 workflow 文件
+          # 过滤掉 workflow 文件，并确保每个文件单独一行
           FILTERED_CONFLICT_FILES=""
-          for file in $CONFLICT_FILES; do
-            if [[ $file != .github/workflows/* ]]; then
-              FILTERED_CONFLICT_FILES="$FILTERED_CONFLICT_FILES\n$file"
+          while IFS= read -r file; do
+            if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
+              FILTERED_CONFLICT_FILES="${FILTERED_CONFLICT_FILES}${file}\n"
             fi
-          done
+          done <<< "$CONFLICT_FILES"
+          
+          # 移除最后的换行符
+          FILTERED_CONFLICT_FILES=$(echo -e "$FILTERED_CONFLICT_FILES" | sed '$ s/\\n$//')
           CONFLICT_FILES="$FILTERED_CONFLICT_FILES"
 
           echo "📝 发现以下冲突文件（已排除workflow文件）："
-          echo "$CONFLICT_FILES"
+          echo -e "$CONFLICT_FILES"
           
           echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
-          echo "$CONFLICT_FILES" >> $GITHUB_ENV
+          echo -e "$CONFLICT_FILES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
           MERGE_SUCCESS=true
           BACKUP_FILES=""
           
-          for file in $CONFLICT_FILES; do
+          # 处理每个冲突文件
+          while IFS= read -r file; do
+            if [ -z "$file" ]; then
+              continue
+            fi
+            
             echo "🔄 处理文件: $file"
             
             # 检查文件是否存在
