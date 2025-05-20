@@ -109,7 +109,14 @@ jobs:
 
           BACKUP_FILES=""
           
-          # 处理每个冲突文件
+          # 获取仓库根目录路径
+          REPO_ROOT=$(pwd)
+          BACKUP_ROOT="../backup_files"
+          
+          # 创建备份根目录
+          rm -rf "$BACKUP_ROOT"
+          mkdir -p "$BACKUP_ROOT"
+          
           while IFS= read -r file; do
             if [ -z "$file" ]; then
               continue
@@ -124,7 +131,14 @@ jobs:
             fi
             
             echo "💾 创建备份文件..."
-            backup_file="${file}.$(date +%Y%m%d_%H%M%S).backup"
+            # 在备份目录中创建对应的目录结构
+            file_dir=$(dirname "$file")
+            backup_dir="$BACKUP_ROOT/$file_dir"
+            mkdir -p "$backup_dir"
+            
+            # 创建备份文件
+            backup_name="$(basename "$file").$(date +%Y%m%d_%H%M%S).backup"
+            backup_file="$backup_dir/$backup_name"
             cp "$file" "$backup_file" || echo "⚠️ 无法创建备份文件: $backup_file"
             
             if [ -f "$backup_file" ]; then
@@ -136,11 +150,6 @@ jobs:
               git add "$file"
             fi
           done <<< "$FILTERED_CONFLICT_FILES"
-
-          # 先提交备份文件
-          echo "💾 提交备份文件..."
-          git add -A
-          git commit -m "备份冲突文件" || true
           
           # 清理当前状态
           git reset --hard HEAD
@@ -151,12 +160,23 @@ jobs:
           git checkout main -- .
           
           # 恢复 workflow 文件
-          git checkout custom-dev -- .github/workflows/
-
-          # 提交main分支更改
-          echo "⚠️ 已同步main分支代码并保存了冲突文件备份"
+          echo "🔄 恢复原有的workflow文件..."
+          rm -rf .github/workflows/*  # 删除从main分支获取的workflow文件
+          git checkout custom-dev -- .github/workflows/  # 恢复custom-dev分支的workflow文件
+          
+          # 恢复备份文件
+          echo "📥 恢复备份文件..."
+          if [ -d "$BACKUP_ROOT" ]; then
+            cp -r "$BACKUP_ROOT"/* .
+            # 清理备份文件夹
+            echo "🧹 清理备份文件夹..."
+            rm -rf "$BACKUP_ROOT"
+          fi
+          
+          # 提交main分支更改和备份文件
+          echo "⚠️ 提交同步的main分支代码和冲突文件备份"
           git add -A
-          git commit -m "同步main分支代码，并保存冲突文件备份"
+          git commit -m "同步main分支代码，并保存冲突文件备份" || echo "没有需要提交的更改"
           git push --force origin custom-dev
           
           echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
