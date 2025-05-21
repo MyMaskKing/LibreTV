@@ -5,6 +5,25 @@ const DEFAULT_WEBDAV_CONFIG = {
   password: 'webdav'
 };
 
+// 不参与同步的键名黑名单
+const SYNC_BLACKLIST = [
+  'sessionId',
+  'deviceId',
+  'tempData',
+  'token',
+  'cloudSyncEnabled', // 同步开关状态不应被同步
+  'lastSyncTime',     // 同步时间戳不应被同步
+  'hasInitializedDefaults', // 初始化状态不应被同步
+  'credentialId'      // 凭据ID不应被同步
+];
+
+// 黑名单前缀，任何以这些前缀开头的键都不会被同步
+const SYNC_BLACKLIST_PREFIXES = [
+  '_temp',           // 临时数据前缀
+  'debug_',          // 调试数据前缀
+  'temp_'            // 临时数据前缀
+];
+
 // WebDAV 客户端
 class WebDAVClient {
   constructor(credentialId) {
@@ -332,28 +351,29 @@ class SyncManager {
     // 如果正在从云端同步到本地，则不处理本地数据变化
     if (this.isSyncingFromCloud || !this.syncEnabled) return;
 
-    // 只处理特定的键值变化
-    const syncKeys = [
-      'viewingHistory',
-      'selectedAPIs',
-      'customAPIs',
-      'yellowFilterEnabled',
-      'adFilteringEnabled',
-      'doubanEnabled',
-      'autoplayEnabled',
-      'userMovieTags',
-      'userTvTags'
-    ];
+    // 检查是否是黑名单中的键
+    if (this.isBlacklistedKey(event.key)) return;
 
-    if (syncKeys.includes(event.key)) {
-      // 确保 WebDAV 客户端已初始化
-      if (!this.webdavClient && this.credentialId) {
-        this.webdavClient = new WebDAVClient(this.credentialId);
-      }
-
-      // 使用防抖处理同步
-      this.debouncedSync();
+    // 确保 WebDAV 客户端已初始化
+    if (!this.webdavClient && this.credentialId) {
+      this.webdavClient = new WebDAVClient(this.credentialId);
     }
+
+    // 使用防抖处理同步
+    this.debouncedSync();
+  }
+
+  // 检查键是否在黑名单中
+  isBlacklistedKey(key) {
+    // 直接检查是否在黑名单列表中
+    if (SYNC_BLACKLIST.includes(key)) return true;
+    
+    // 检查前缀
+    for (const prefix of SYNC_BLACKLIST_PREFIXES) {
+      if (key.startsWith(prefix)) return true;
+    }
+    
+    return false;
   }
 
   // 添加样式到页面
@@ -465,8 +485,7 @@ class SyncManager {
 
       // 获取所有需要同步的数据
       const localData = {
-        settings: this.getSettingsToSync(),
-        viewingHistory: this.getViewingHistoryToSync(),
+        data: this.getAllLocalStorageData(),
         timestamp: Date.now(),
         credentialId: this.credentialId
       };
@@ -529,15 +548,10 @@ class SyncManager {
       this.isSyncingFromCloud = true;
 
       try {
-        // 直接应用云端数据
-        if (data.settings) {
-          console.log('正在应用云端设置...');
-          this.applySettings(data.settings);
-        }
-
-        if (data.viewingHistory) {
-          console.log('正在应用云端观看记录...');
-          this.applyViewingHistory(data.viewingHistory);
+        // 应用云端数据
+        if (data.data) {
+          console.log('正在应用云端数据...');
+          this.applyCloudData(data.data);
         }
         
         this.lastSyncTime = Date.now();
@@ -574,218 +588,118 @@ class SyncManager {
       return false;
     }
 
-    if (data.settings && typeof data.settings !== 'object') {
-      console.error('云端数据无效: 设置数据格式错误');
+    if (!data.data || typeof data.data !== 'object') {
+      console.error('云端数据无效: 缺少数据字段或格式错误');
       return false;
-    }
-
-    if (data.viewingHistory) {
-      if (typeof data.viewingHistory !== 'object') {
-        console.error('云端数据无效: 观看历史数据格式错误');
-        return false;
-      }
-
-      if (data.viewingHistory.history && !Array.isArray(data.viewingHistory.history)) {
-        console.error('云端数据无效: 观看历史记录格式错误');
-        return false;
-      }
-
-      if (data.viewingHistory.progress && typeof data.viewingHistory.progress !== 'object') {
-        console.error('云端数据无效: 观看进度数据格式错误');
-        return false;
-      }
     }
 
     return true;
   }
 
-  // 获取需要同步的设置
-  getSettingsToSync() {
-    const settings = {};
+  // 获取所有需要同步的 localStorage 数据
+  getAllLocalStorageData() {
+    const data = {};
     
-    // 获取选中的 API
-    const selectedAPIs = localStorage.getItem('selectedAPIs');
-    if (selectedAPIs) {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      
+      // 跳过黑名单中的键
+      if (this.isBlacklistedKey(key)) continue;
+      
       try {
-        settings.selectedAPIs = JSON.parse(selectedAPIs);
+        data[key] = localStorage.getItem(key);
       } catch (e) {
-        settings.selectedAPIs = [];
+        console.error('获取 localStorage 项目失败:', key, e);
       }
     }
-
-    // 获取自定义 API
-    const customAPIs = localStorage.getItem('customAPIs');
-    if (customAPIs) {
-      try {
-        settings.customAPIs = JSON.parse(customAPIs);
-        console.log('准备同步的自定义API:', settings.customAPIs);
-      } catch (e) {
-        settings.customAPIs = [];
-      }
-    }
-
-    // 获取其他设置
-    settings.yellowFilterEnabled = localStorage.getItem('yellowFilterEnabled') === 'true';
-    settings.adFilteringEnabled = localStorage.getItem(PLAYER_CONFIG.adFilteringStorage) === 'true';
-    settings.doubanEnabled = localStorage.getItem('doubanEnabled') === 'true';
-    settings.autoplayEnabled = localStorage.getItem('autoplayEnabled') === 'true';
-
-    // 获取用户标签
-    const userMovieTags = localStorage.getItem('userMovieTags');
-    if (userMovieTags) {
-      try {
-        settings.userMovieTags = JSON.parse(userMovieTags);
-      } catch (e) {
-        settings.userMovieTags = [];
-      }
-    }
-
-    const userTvTags = localStorage.getItem('userTvTags');
-    if (userTvTags) {
-      try {
-        settings.userTvTags = JSON.parse(userTvTags);
-      } catch (e) {
-        settings.userTvTags = [];
-      }
-    }
-
-    console.log('准备同步的完整设置:', settings);
-    return settings;
+    
+    return data;
   }
 
-  // 获取需要同步的观看记录
-  getViewingHistoryToSync() {
-    const history = {
-      history: [],
-      progress: {}
-    };
-
-    // 获取观看历史
-    const viewingHistory = localStorage.getItem('viewingHistory');
-    if (viewingHistory) {
-      try {
-        history.history = JSON.parse(viewingHistory);
-      } catch (e) {
-        history.history = [];
-      }
+  // 应用云端数据到本地
+  applyCloudData(cloudData) {
+    if (!cloudData || typeof cloudData !== 'object') {
+      console.error('应用云端数据失败: 数据格式无效');
+      return false;
     }
-
-    // 获取所有视频进度
-    Object.keys(localStorage).forEach(key => {
-      if (key.startsWith('videoProgress_')) {
-        try {
-          const progress = JSON.parse(localStorage.getItem(key));
-          history.progress[key] = progress;
-        } catch (e) {
-          console.error('解析视频进度失败:', key, e);
+    
+    try {
+      // 保存当前黑名单中的项目值
+      const blacklistValues = {};
+      for (const key of SYNC_BLACKLIST) {
+        if (localStorage.getItem(key) !== null) {
+          blacklistValues[key] = localStorage.getItem(key);
         }
       }
-    });
-
-    return history;
+      
+      // 应用云端数据到本地
+      let appliedCount = 0;
+      for (const [key, value] of Object.entries(cloudData)) {
+        // 跳过黑名单中的键（额外保护措施）
+        if (this.isBlacklistedKey(key)) continue;
+        
+        try {
+          localStorage.setItem(key, value);
+          appliedCount++;
+        } catch (e) {
+          console.error('设置 localStorage 项目失败:', key, e);
+        }
+      }
+      
+      console.log(`已成功应用 ${appliedCount} 项云端数据`);
+      
+      // 恢复黑名单项目
+      for (const [key, value] of Object.entries(blacklistValues)) {
+        localStorage.setItem(key, value);
+      }
+      
+      // 触发 UI 更新事件
+      this.triggerUIUpdates();
+      
+      return true;
+    } catch (error) {
+      console.error('应用云端数据时发生错误:', error);
+      return false;
+    }
   }
 
-  // 应用设置
-  applySettings(settings) {
-    if (!settings) return;
-
-    try {
-      // 保存选中的 API
-      if (Array.isArray(settings.selectedAPIs)) {
-        localStorage.setItem('selectedAPIs', JSON.stringify(settings.selectedAPIs));
-        console.log('已同步选中的 API:', settings.selectedAPIs);
-      }
-
-      // 保存自定义 API
-      if (Array.isArray(settings.customAPIs)) {
-        localStorage.setItem('customAPIs', JSON.stringify(settings.customAPIs));
-        console.log('已同步自定义 API:', settings.customAPIs);
-      }
-
-      // 保存其他设置
-      if (typeof settings.yellowFilterEnabled === 'boolean') {
-        localStorage.setItem('yellowFilterEnabled', settings.yellowFilterEnabled.toString());
-        console.log('已同步黄色内容过滤设置:', settings.yellowFilterEnabled);
-      }
-      if (typeof settings.adFilteringEnabled === 'boolean') {
-        localStorage.setItem(PLAYER_CONFIG.adFilteringStorage, settings.adFilteringEnabled.toString());
-        console.log('已同步广告过滤设置:', settings.adFilteringEnabled);
-      }
-      if (typeof settings.doubanEnabled === 'boolean') {
-        localStorage.setItem('doubanEnabled', settings.doubanEnabled.toString());
-        console.log('已同步豆瓣设置:', settings.doubanEnabled);
-      }
-      if (typeof settings.autoplayEnabled === 'boolean') {
-        localStorage.setItem('autoplayEnabled', settings.autoplayEnabled.toString());
-        console.log('已同步自动播放设置:', settings.autoplayEnabled);
-      }
-
-      // 保存用户标签
-      if (Array.isArray(settings.userMovieTags)) {
-        localStorage.setItem('userMovieTags', JSON.stringify(settings.userMovieTags));
-        console.log('已同步电影标签:', settings.userMovieTags);
-      }
-      if (Array.isArray(settings.userTvTags)) {
-        localStorage.setItem('userTvTags', JSON.stringify(settings.userTvTags));
-        console.log('已同步电视剧标签:', settings.userTvTags);
-      }
-
-      // 更新UI状态
-      // 更新黄色内容过滤开关
-      const yellowFilterToggle = document.getElementById('yellowFilterToggle');
-      if (yellowFilterToggle) {
-        yellowFilterToggle.checked = settings.yellowFilterEnabled;
-      }
-
-      // 更新广告过滤开关
-      const adFilterToggle = document.getElementById('adFilterToggle');
-      if (adFilterToggle) {
-        adFilterToggle.checked = settings.adFilteringEnabled;
-      }
-
-      // 更新API复选框
+  // 触发 UI 更新
+  triggerUIUpdates() {
+    // 更新 API 复选框
+    if (typeof initAPICheckboxes === 'function') {
       initAPICheckboxes();
-      
-      // 更新自定义API列表
+    }
+    
+    // 更新自定义 API 列表
+    if (typeof renderCustomAPIsList === 'function') {
       renderCustomAPIsList();
-      
-      // 更新选中的API数量
+    }
+    
+    // 更新选中的 API 数量
+    if (typeof updateSelectedApiCount === 'function') {
       updateSelectedApiCount();
-
-      // 触发设置更新事件
-      document.dispatchEvent(new CustomEvent('settingsUpdated'));
-    } catch (error) {
-      console.error('应用设置时发生错误:', error);
-      throw error;
     }
-  }
-
-  // 应用观看记录
-  applyViewingHistory(history) {
-    if (!history) return;
-
-    try {
-      // 保存观看历史
-      if (Array.isArray(history.history)) {
-        localStorage.setItem('viewingHistory', JSON.stringify(history.history));
-        console.log('已同步观看历史记录:', history.history.length, '条');
-      }
-
-      // 保存视频进度
-      if (history.progress && typeof history.progress === 'object') {
-        let progressCount = 0;
-        Object.entries(history.progress).forEach(([key, value]) => {
-          if (typeof value === 'object') {
-            localStorage.setItem(key, JSON.stringify(value));
-            progressCount++;
-          }
-        });
-        console.log('已同步视频进度:', progressCount, '个');
-      }
-    } catch (error) {
-      console.error('应用观看记录时发生错误:', error);
-      throw error;
+    
+    // 更新黄色内容过滤开关
+    const yellowFilterToggle = document.getElementById('yellowFilterToggle');
+    if (yellowFilterToggle) {
+      yellowFilterToggle.checked = localStorage.getItem('yellowFilterEnabled') === 'true';
     }
+
+    // 更新广告过滤开关
+    const adFilterToggle = document.getElementById('adFilterToggle');
+    if (adFilterToggle) {
+      adFilterToggle.checked = localStorage.getItem(PLAYER_CONFIG.adFilteringStorage) === 'true';
+    }
+    
+    // 更新自动播放开关
+    const autoplayToggle = document.getElementById('autoplayToggle');
+    if (autoplayToggle) {
+      autoplayToggle.checked = localStorage.getItem('autoplayEnabled') === 'true';
+    }
+    
+    // 触发设置更新事件
+    document.dispatchEvent(new CustomEvent('settingsUpdated'));
   }
 
   // 启动自动同步
@@ -842,15 +756,10 @@ class SyncManager {
           this.isSyncingFromCloud = true;
 
           try {
-            // 直接应用云端数据
-            if (cloudData.settings) {
-              console.log('正在应用云端设置...');
-              this.applySettings(cloudData.settings);
-            }
-
-            if (cloudData.viewingHistory) {
-              console.log('正在应用云端观看记录...');
-              this.applyViewingHistory(cloudData.viewingHistory);
+            // 应用云端数据
+            if (cloudData.data) {
+              console.log('正在应用云端数据...');
+              this.applyCloudData(cloudData.data);
             }
             
             this.lastSyncTime = Date.now();
@@ -874,8 +783,7 @@ class SyncManager {
       } else {
         // 云端没有数据，同步本地数据到云端
         const localData = {
-          settings: this.getSettingsToSync(),
-          viewingHistory: this.getViewingHistoryToSync(),
+          data: this.getAllLocalStorageData(),
           timestamp: Date.now(),
           credentialId: this.credentialId
         };
