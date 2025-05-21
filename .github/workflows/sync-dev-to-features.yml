@@ -1,4 +1,4 @@
-name: 发布Beta版本
+name: 发布功能分支版本(custom-features)
 
 on:
   # 只允许手动触发
