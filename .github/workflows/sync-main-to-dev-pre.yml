@@ -72,6 +72,7 @@ jobs:
           
           # 获取仓库根目录路径和备份目录
           REPO_ROOT=$(pwd)
+          echo -e "当前所处目录：$REPO_ROOT"
           BACKUP_ROOT="../backup_files"
           
           # 创建备份根目录
@@ -97,7 +98,8 @@ jobs:
           
           BACKUP_FILES=""
           
-          while IFS= read -r file; do
+          # 修复：逐行处理冲突文件
+          echo -e "$FILTERED_CONFLICT_FILES" | while IFS= read -r file; do
             if [ -z "$file" ]; then
               continue
             fi
@@ -137,7 +139,7 @@ jobs:
               git checkout main -- "$file"
               git add "$file"
             fi
-          done <<< "$FILTERED_CONFLICT_FILES"
+          done
           
           # 清理当前状态
           git reset --hard HEAD
