@@ -15,7 +15,11 @@ const SITE_CONFIG = {
     name: 'LibreTV',
     url: 'https://libretv.is-an.org',
     description: '免费在线视频搜索与观看平台',
+<<<<<<< HEAD
+    logo: './image/retrotv_5520.png',
+=======
     logo: 'image/logo.png',
+>>>>>>> main
     version: '1.0.3'
 };
 
@@ -260,3 +264,47 @@ const CUSTOM_API_CONFIG = {
 
 // 隐藏内置黄色采集站API的变量
 const HIDE_BUILTIN_ADULT_APIS = false;
+
+// 云同步相关配置
+const SYNC_CONFIG = {
+    enabled: true,                // 默认是否启用云同步功能
+    scriptPath: 'js/sync/sync.js', // 同步模块脚本路径
+    autoLoad: true                // 是否自动加载同步脚本
+};
+
+// 自动加载云同步功能
+(function() {
+    // 判断是否已经加载了同步模块
+    if (window.syncManager || document.querySelector('script[src*="sync.js"]')) {
+        console.log('同步模块已加载，跳过自动加载');
+        return;
+    }
+    
+    // 判断是否需要自动加载
+    if (!SYNC_CONFIG.autoLoad) {
+        console.log('云同步自动加载已禁用');
+        return;
+    }
+    
+    // 动态创建script标签加载同步模块
+    console.log('正在自动加载云同步模块...');
+    const script = document.createElement('script');
+    script.src = SYNC_CONFIG.scriptPath;
+    script.async = true;
+    script.onload = function() {
+        console.log('云同步模块加载成功');
+    };
+    script.onerror = function() {
+        console.error('云同步模块加载失败');
+    };
+    
+    // 添加到页面
+    document.addEventListener('DOMContentLoaded', function() {
+        document.head.appendChild(script);
+    });
+    
+    // 如果DOM已加载完成，则立即添加脚本
+    if (document.readyState === 'interactive' || document.readyState === 'complete') {
+        document.head.appendChild(script);
+    }
+})();
