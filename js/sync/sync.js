@@ -158,6 +158,7 @@ class SyncManager {
     this.syncDebounceTimer = null;
     this.syncInProgress = false;
     this.syncStatusIcon = null;
+    this.manualSyncBtn = null; // 添加手动同步按钮引用
     this.isManualSync = false;
 
     // 初始化
@@ -246,6 +247,88 @@ class SyncManager {
         this.updateCloudSyncButton();
       }
     });
+
+    // 创建手动同步按钮
+    const syncSettingsElement = document.getElementById('cloudSyncBtn').parentElement;
+    
+    // 创建手动同步按钮
+    const manualSyncBtn = document.createElement('button');
+    manualSyncBtn.id = 'manualSyncBtn';
+    manualSyncBtn.className = 'btn btn-secondary mt-2';
+    manualSyncBtn.innerHTML = `
+      <span class="relative flex items-center justify-center">
+        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-cloud-download w-5 h-5 mr-2" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
+          <path d="M19 18a3.5 3.5 0 0 0 0 -7h-1a5 4.5 0 0 0 -11 -2a4.6 4.4 0 0 0 -2.1 8.4"></path>
+          <path d="M12 13l0 9"></path>
+          <path d="M9 19l3 3l3 -3"></path>
+        </svg>
+        <span class="btn-text">从云端同步到本地</span>
+        <span id="manualSyncLoading" class="absolute right-2 -mt-1 hidden">
+          <div class="w-4 h-4 border-2 border-t-2 border-gray-200 border-t-blue-500 rounded-full animate-spin"></div>
+        </span>
+      </span>
+    `;
+    
+    // 添加手动同步按钮点击事件
+    manualSyncBtn.addEventListener('click', async () => {
+      // 检查凭据ID
+      const credentialId = document.getElementById('credentialId').value.trim();
+      if (!credentialId) {
+        showToast('请输入个人凭据ID', 'error');
+        return;
+      }
+
+      // 设置loading状态
+      manualSyncBtn.disabled = true;
+      document.getElementById('manualSyncLoading').classList.remove('hidden');
+      this.updateSyncStatus('syncing');
+      
+      try {
+        // 确保 WebDAV 客户端已初始化
+        if (!this.webdavClient) {
+          this.webdavClient = new WebDAVClient(credentialId);
+        }
+        
+        // 测试连接
+        const connected = await this.webdavClient.testConnection();
+        if (!connected) {
+          showToast('WebDAV 连接测试失败，请检查网络连接', 'error');
+          this.updateSyncStatus('error');
+          return;
+        }
+        
+        // 从云端同步数据
+        const success = await this.syncFromCloud();
+        if (success) {
+          this.updateSyncStatus('success');
+          showToast('数据已从云端同步成功，即将刷新页面', 'success');
+          
+          // 刷新页面以应用更改
+          setTimeout(() => {
+            window.location.reload();
+          }, 2500);
+        } else {
+          this.updateSyncStatus('error');
+        }
+      } catch (error) {
+        console.error('手动同步失败:', error);
+        showToast('同步失败，请稍后重试', 'error');
+        this.updateSyncStatus('error');
+      } finally {
+        manualSyncBtn.disabled = false;
+        document.getElementById('manualSyncLoading').classList.add('hidden');
+      }
+    });
+    
+    // 添加到DOM
+    syncSettingsElement.appendChild(manualSyncBtn);
+    
+    // 初始显示状态
+    manualSyncBtn.style.display = this.syncEnabled ? 'block' : 'none';
+    
+    // 保存引用以便后续更新
+    this.manualSyncBtn = manualSyncBtn;
   }
 
   // 更新云同步按钮状态
@@ -266,15 +349,27 @@ class SyncManager {
     if (!credentialId) {
       btn.disabled = true;
       btnText.textContent = '开启云同步';
+      // 隐藏手动同步按钮
+      if (this.manualSyncBtn) {
+        this.manualSyncBtn.style.display = 'none';
+      }
       return;
     }
 
     if (this.syncEnabled) {
       btn.disabled = false;
       btnText.textContent = '关闭云同步';
+      // 显示手动同步按钮
+      if (this.manualSyncBtn) {
+        this.manualSyncBtn.style.display = 'block';
+      }
     } else {
       btn.disabled = false;
       btnText.textContent = '开启云同步';
+      // 隐藏手动同步按钮
+      if (this.manualSyncBtn) {
+        this.manualSyncBtn.style.display = 'none';
+      }
     }
   }
 
@@ -398,6 +493,40 @@ class SyncManager {
       #syncStatusIcon {
         cursor: pointer;
         user-select: none;
+      }
+      
+      /* 手动同步按钮样式 */
+      #manualSyncBtn {
+        width: 100%;
+        margin-top: 8px;
+        background-color: #4f46e5;
+        border: none;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 6px;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      }
+      
+      #manualSyncBtn:hover {
+        background-color: #4338ca;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      
+      #manualSyncBtn:disabled {
+        background-color: #6b7280;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+      
+      #manualSyncBtn .icon {
+        flex-shrink: 0;
       }
       
       /* 公告栏样式 */
@@ -590,10 +719,59 @@ class SyncManager {
     }
   }
 
+  // 从云端同步数据到本地的共通方法
+  async syncDataFromCloudToLocal(cloudData, showSuccessMessage = true) {
+    if (!cloudData) {
+      console.log('云端暂无数据');
+      showToast('云端暂无数据', 'warning');
+      return false;
+    }
+
+    // 验证云端数据
+    if (!this.validateCloudData(cloudData)) {
+      console.error('从云端同步失败: 数据格式无效');
+      showToast('云端数据格式无效', 'error');
+      return false;
+    }
+
+    if (cloudData.credentialId !== this.credentialId) {
+      console.error('从云端同步失败: 凭据ID不匹配');
+      showToast('云端数据与当前凭据ID不匹配', 'error');
+      return false;
+    }
+
+    // 显示同步中的提示
+    showToast('正在从云端同步数据...', 'info');
+
+    // 设置同步标志
+    this.isSyncingFromCloud = true;
+
+    try {
+      // 应用云端数据
+      if (cloudData.data) {
+        console.log('正在应用云端数据...');
+        this.applyCloudData(cloudData.data);
+      }
+      
+      this.lastSyncTime = Date.now();
+      localStorage.setItem('lastSyncTime', this.lastSyncTime);
+      
+      console.log('从云端同步成功，时间戳:', this.lastSyncTime);
+      if (showSuccessMessage) {
+        showToast('数据已从云端同步成功', 'success');
+      }
+      return true;
+    } finally {
+      // 清除同步标志
+      this.isSyncingFromCloud = false;
+    }
+  }
+
   // 从云端同步
   async syncFromCloud() {
-    if (!this.syncEnabled || !this.webdavClient) {
-      console.error('从云端同步失败: 同步未启用或 WebDAV 客户端未初始化');
+    if (!this.webdavClient) {
+      console.error('从云端同步失败: WebDAV 客户端未初始化');
+      showToast('WebDAV 客户端未初始化，请确保已正确设置凭据ID', 'error');
       return false;
     }
 
@@ -602,49 +780,15 @@ class SyncManager {
       const connected = await this.webdavClient.testConnection();
       if (!connected) {
         console.error('从云端同步失败: WebDAV 连接测试失败');
+        showToast('WebDAV 连接测试失败，请检查网络连接', 'error');
         return false;
       }
 
-      const data = await this.webdavClient.downloadData();
-      if (!data) {
-        console.log('云端暂无数据');
-        return false;
-      }
-
-      // 验证数据格式
-      if (!this.validateCloudData(data)) {
-        console.error('从云端同步失败: 数据格式无效');
-        return false;
-      }
-
-      if (data.credentialId !== this.credentialId) {
-        console.error('从云端同步失败: 凭据ID不匹配');
-        return false;
-      }
-
-      // 显示同步中的提示
-      showToast('正在从云端同步数据...', 'info');
-
-      // 设置同步标志
-      this.isSyncingFromCloud = true;
-
-      try {
-        // 应用云端数据
-        if (data.data) {
-          console.log('正在应用云端数据...');
-          this.applyCloudData(data.data);
-        }
-        
-        this.lastSyncTime = Date.now();
-        localStorage.setItem('lastSyncTime', this.lastSyncTime);
-        
-        console.log('从云端同步成功，时间戳:', this.lastSyncTime);
-        showToast('数据已从云端同步成功', 'success');
-        return true;
-      } finally {
-        // 清除同步标志
-        this.isSyncingFromCloud = false;
-      }
+      // 从云端下载数据
+      const cloudData = await this.webdavClient.downloadData();
+      
+      // 使用共通方法处理云端数据同步到本地
+      return await this.syncDataFromCloudToLocal(cloudData);
     } catch (error) {
       console.error('从云端同步过程发生错误:', error);
       showToast('从云端同步失败，请稍后重试', 'error');
@@ -820,45 +964,17 @@ class SyncManager {
       localStorage.setItem('credentialId', this.credentialId);
 
       if (cloudData) {
-        // 验证云端数据
-        if (!this.validateCloudData(cloudData)) {
-          showToast('云端数据格式无效', 'error');
-          return;
-        }
-
-        if (cloudData.credentialId !== credentialId) {
-          showToast('云端数据与当前凭据ID不匹配', 'error');
-          return;
-        }
-
-        // 4. 从云端同步数据到本地
-        try {
-          // 设置同步标志
-          this.isSyncingFromCloud = true;
-
-          try {
-            // 应用云端数据
-            if (cloudData.data) {
-              console.log('正在应用云端数据...');
-              this.applyCloudData(cloudData.data);
-            }
-            
-            this.lastSyncTime = Date.now();
-            localStorage.setItem('lastSyncTime', this.lastSyncTime);
-            
-            console.log('从云端同步成功，时间戳:', this.lastSyncTime);
-            showToast('云同步已开启，数据已从云端同步', 'success');
-
-            // 刷新整个页面
-            setTimeout(() => {
-              window.location.reload();
-            }, 2000); // 延迟2秒后刷新，让用户看到成功提示
-          } finally {
-            // 清除同步标志
-            this.isSyncingFromCloud = false;
-          }
-        } catch (error) {
-          console.error('从云端同步数据失败:', error);
+        // 使用共通方法处理云端数据同步到本地
+        const syncSuccess = await this.syncDataFromCloudToLocal(cloudData, false);
+        
+        if (syncSuccess) {
+          showToast('云同步已开启，数据已从云端同步', 'success');
+          
+          // 刷新整个页面
+          setTimeout(() => {
+            window.location.reload();
+          }, 2500); // 延迟2.5秒后刷新，让用户看到成功提示
+        } else {
           showToast('云同步已开启，但从云端同步数据失败', 'warning');
         }
       } else {
