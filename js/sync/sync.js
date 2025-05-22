@@ -22,7 +22,9 @@ const SYNC_BLACKLIST = [
   'cloudSyncEnabled', // 同步开关状态不应被同步
   'lastSyncTime',     // 同步时间戳不应被同步
   'hasInitializedDefaults', // 初始化状态不应被同步
-  'credentialId'      // 凭据ID不应被同步
+  'credentialId',      // 凭据ID不应被同步
+  'syncLock',          // 同步锁不应被同步
+  'syncLockTimestamp'  // 同步锁时间戳不应被同步
 ];
 
 // 黑名单前缀，任何以这些前缀开头的键都不会被同步
@@ -31,6 +33,14 @@ const SYNC_BLACKLIST_PREFIXES = [
   'debug_',          // 调试数据前缀
   'temp_'            // 临时数据前缀
 ];
+
+// 同步锁配置
+const SYNC_LOCK_CONFIG = {
+  lockKey: 'syncLock',
+  lockTimeKey: 'syncLockTimestamp',
+  lockTimeout: 60000, // 锁超时时间，60秒
+  heartbeatInterval: 10000 // 心跳间隔，10秒
+};
 
 // WebDAV 客户端
 class WebDAVClient {
@@ -160,21 +170,86 @@ class SyncManager {
     this.syncStatusIcon = null;
     this.manualSyncBtn = null; // 添加手动同步按钮引用
     this.isManualSync = false;
-
+    
+    // 页面标识
+    this.pageId = this.generatePageId();
+    
+    // 页面活跃状态
+    this.isPageActive = true;
+    
+    // 同步锁相关
+    this.lockHeartbeatTimer = null;
+    this.syncChannel = new BroadcastChannel('libretv_sync_channel');
+    
+    // 检查当前页面类型
+    this.isSettingsPage = this.checkIsSettingsPage();
+    
     // 初始化
     this.initSyncStatusIcon();
     this.addStyles();
     this.setupEventListeners();
-    this.initUI();
+    
+    // 只在设置页面初始化UI
+    if (this.isSettingsPage) {
+      this.initUI();
+    }
     
     // 检查公告
     this.checkAnnouncement();
+    
+    // 设置页面可见性监听
+    this.setupVisibilityListener();
+  }
+  
+  // 检查当前页面是否为设置页面
+  checkIsSettingsPage() {
+    // 检查URL路径
+    const isIndexPage = window.location.pathname === '/' || 
+                        window.location.pathname.endsWith('/index.html');
+    
+    // 检查特定DOM元素是否存在
+    const hasSettingsElements = document.getElementById('credentialId') && 
+                               document.getElementById('cloudSyncBtn');
+    
+    return isIndexPage && hasSettingsElements;
+  }
+
+  // 生成页面唯一标识
+  generatePageId() {
+    return Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
+  }
+  
+  // 设置页面可见性监听
+  setupVisibilityListener() {
+    document.addEventListener('visibilitychange', () => {
+      this.isPageActive = document.visibilityState === 'visible';
+      
+      // 如果页面变为可见，并且持有锁，则更新心跳
+      if (this.isPageActive && this.isHoldingLock()) {
+        this.updateLockHeartbeat();
+      }
+      
+      // 如果页面变为不可见，并且持有锁，则释放锁
+      if (!this.isPageActive && this.isHoldingLock()) {
+        this.releaseSyncLock();
+      }
+    });
+    
+    // 页面关闭前释放锁
+    window.addEventListener('beforeunload', () => {
+      if (this.isHoldingLock()) {
+        this.releaseSyncLock();
+      }
+    });
   }
 
   // 设置事件监听器
   setupEventListeners() {
     // 监听 localStorage 变化
     window.addEventListener('storage', this.handleStorageChange.bind(this));
+    
+    // 监听同步通道消息
+    this.syncChannel.addEventListener('message', this.handleSyncMessage.bind(this));
     
     // 重写 localStorage 的 setItem 方法
     const originalSetItem = localStorage.setItem;
@@ -195,20 +270,171 @@ class SyncManager {
       window.dispatchEvent(event);
     };
   }
+  
+  // 处理同步通道消息
+  handleSyncMessage(event) {
+    const message = event.data;
+    
+    switch (message.type) {
+      case 'lockRequest':
+        // 如果当前页面持有锁，则回应
+        if (this.isHoldingLock()) {
+          this.syncChannel.postMessage({
+            type: 'lockResponse',
+            pageId: this.pageId,
+            hasLock: true
+          });
+        }
+        break;
+        
+      case 'lockAcquired':
+        // 其他页面获取了锁，更新本地状态
+        console.log(`页面 ${message.pageId} 获取了同步锁`);
+        break;
+        
+      case 'lockReleased':
+        // 锁被释放，可以尝试获取
+        console.log(`页面 ${message.pageId} 释放了同步锁`);
+        break;
+        
+      case 'syncComplete':
+        // 同步已完成，更新本地状态
+        console.log(`页面 ${message.pageId} 完成了同步操作`);
+        // 更新最后同步时间
+        if (message.lastSyncTime) {
+          this.lastSyncTime = message.lastSyncTime;
+          localStorage.setItem('lastSyncTime', this.lastSyncTime);
+        }
+        break;
+    }
+  }
+  
+  // 尝试获取同步锁
+  async acquireSyncLock() {
+    // 如果已经持有锁，直接返回成功
+    if (this.isHoldingLock()) {
+      return true;
+    }
+    
+    // 检查锁是否已过期
+    this.checkAndClearExpiredLock();
+    
+    // 检查是否有其他页面持有锁
+    const currentLock = localStorage.getItem(SYNC_LOCK_CONFIG.lockKey);
+    if (currentLock && currentLock !== this.pageId) {
+      console.log(`同步锁被页面 ${currentLock} 持有，等待锁释放`);
+      return false;
+    }
+    
+    // 尝试获取锁
+    localStorage.setItem(SYNC_LOCK_CONFIG.lockKey, this.pageId);
+    localStorage.setItem(SYNC_LOCK_CONFIG.lockTimeKey, Date.now().toString());
+    
+    // 广播已获取锁
+    this.syncChannel.postMessage({
+      type: 'lockAcquired',
+      pageId: this.pageId
+    });
+    
+    // 设置锁心跳
+    this.startLockHeartbeat();
+    
+    console.log(`页面 ${this.pageId} 获取了同步锁`);
+    return true;
+  }
+  
+  // 释放同步锁
+  releaseSyncLock() {
+    // 只有持有锁的页面才能释放
+    if (!this.isHoldingLock()) {
+      return;
+    }
+    
+    // 停止心跳
+    this.stopLockHeartbeat();
+    
+    // 清除锁
+    localStorage.removeItem(SYNC_LOCK_CONFIG.lockKey);
+    localStorage.removeItem(SYNC_LOCK_CONFIG.lockTimeKey);
+    
+    // 广播已释放锁
+    this.syncChannel.postMessage({
+      type: 'lockReleased',
+      pageId: this.pageId
+    });
+    
+    console.log(`页面 ${this.pageId} 释放了同步锁`);
+  }
+  
+  // 检查是否持有锁
+  isHoldingLock() {
+    return localStorage.getItem(SYNC_LOCK_CONFIG.lockKey) === this.pageId;
+  }
+  
+  // 检查并清除过期的锁
+  checkAndClearExpiredLock() {
+    const lockTimestamp = parseInt(localStorage.getItem(SYNC_LOCK_CONFIG.lockTimeKey) || '0');
+    const now = Date.now();
+    
+    // 如果锁已过期，则清除
+    if (now - lockTimestamp > SYNC_LOCK_CONFIG.lockTimeout) {
+      console.log('检测到过期的同步锁，正在清除');
+      localStorage.removeItem(SYNC_LOCK_CONFIG.lockKey);
+      localStorage.removeItem(SYNC_LOCK_CONFIG.lockTimeKey);
+      return true;
+    }
+    
+    return false;
+  }
+  
+  // 开始锁心跳
+  startLockHeartbeat() {
+    // 先清除可能存在的心跳定时器
+    this.stopLockHeartbeat();
+    
+    // 设置新的心跳定时器
+    this.lockHeartbeatTimer = setInterval(() => {
+      this.updateLockHeartbeat();
+    }, SYNC_LOCK_CONFIG.heartbeatInterval);
+  }
+  
+  // 停止锁心跳
+  stopLockHeartbeat() {
+    if (this.lockHeartbeatTimer) {
+      clearInterval(this.lockHeartbeatTimer);
+      this.lockHeartbeatTimer = null;
+    }
+  }
+  
+  // 更新锁心跳
+  updateLockHeartbeat() {
+    if (this.isHoldingLock()) {
+      localStorage.setItem(SYNC_LOCK_CONFIG.lockTimeKey, Date.now().toString());
+    }
+  }
 
   // 初始化UI
   initUI() {
+    // 如果不是设置页面，直接返回
+    if (!this.isSettingsPage) {
+      console.log('当前页面不是设置页面，跳过UI初始化');
+      return;
+    }
+    
+    const credentialIdElement = document.getElementById('credentialId');
+    const cloudSyncBtnElement = document.getElementById('cloudSyncBtn');
+    
     // 初始化云同步设置
     const credentialId = localStorage.getItem('credentialId');
     if (credentialId) {
-      document.getElementById('credentialId').value = credentialId;
+      credentialIdElement.value = credentialId;
     }
 
     // 初始化按钮状态
     this.updateCloudSyncButton();
 
     // 添加凭据ID输入框的事件监听
-    document.getElementById('credentialId').addEventListener('input', (e) => {
+    credentialIdElement.addEventListener('input', (e) => {
       const credentialId = e.target.value.trim();
       if (credentialId) {
         localStorage.setItem('credentialId', credentialId);
@@ -219,8 +445,8 @@ class SyncManager {
     });
 
     // 添加云同步按钮事件监听
-    document.getElementById('cloudSyncBtn').addEventListener('click', async () => {
-      const credentialId = document.getElementById('credentialId').value.trim();
+    cloudSyncBtnElement.addEventListener('click', async () => {
+      const credentialId = credentialIdElement.value.trim();
       
       // 检查凭据ID
       if (!credentialId) {
@@ -249,7 +475,7 @@ class SyncManager {
     });
 
     // 创建手动同步按钮
-    const syncSettingsElement = document.getElementById('cloudSyncBtn').parentElement;
+    const syncSettingsElement = cloudSyncBtnElement.parentElement;
     
     // 创建手动同步按钮
     const manualSyncBtn = document.createElement('button');
@@ -273,7 +499,7 @@ class SyncManager {
     // 添加手动同步按钮点击事件
     manualSyncBtn.addEventListener('click', async () => {
       // 检查凭据ID
-      const credentialId = document.getElementById('credentialId').value.trim();
+      const credentialId = credentialIdElement.value.trim();
       if (!credentialId) {
         showToast('请输入个人凭据ID', 'error');
         return;
@@ -307,7 +533,7 @@ class SyncManager {
           // 刷新页面以应用更改
           setTimeout(() => {
             window.location.reload();
-          }, 2500);
+          }, 3000);
         } else {
           this.updateSyncStatus('error');
         }
@@ -333,10 +559,22 @@ class SyncManager {
 
   // 更新云同步按钮状态
   updateCloudSyncButton(isLoading = false) {
+    // 如果不是设置页面，直接返回
+    if (!this.isSettingsPage) {
+      return;
+    }
+    
     const btn = document.getElementById('cloudSyncBtn');
+    if (!btn) return;
+    
     const btnText = btn.querySelector('.btn-text');
     const loadingIcon = document.getElementById('cloudSyncLoading');
-    const credentialId = document.getElementById('credentialId').value.trim();
+    if (!btnText || !loadingIcon) return;
+    
+    const credentialIdElement = document.getElementById('credentialId');
+    if (!credentialIdElement) return;
+    
+    const credentialId = credentialIdElement.value.trim();
     
     if (isLoading) {
       btn.disabled = true;
@@ -375,13 +613,32 @@ class SyncManager {
 
   // 初始化同步状态图标
   initSyncStatusIcon() {
-    // 创建同步状态图标
-    this.syncStatusIcon = document.createElement('div');
-    this.syncStatusIcon.id = 'syncStatusIcon';
-    this.syncStatusIcon.className = 'fixed bottom-4 right-4 p-2 rounded-full bg-gray-800 text-white opacity-0 transition-opacity duration-300';
-    this.syncStatusIcon.innerHTML = '🔄';
-    this.syncStatusIcon.style.zIndex = '1000';
-    document.body.appendChild(this.syncStatusIcon);
+    try {
+      // 检查是否已存在同步状态图标
+      if (document.getElementById('syncStatusIcon')) {
+        this.syncStatusIcon = document.getElementById('syncStatusIcon');
+        return;
+      }
+      
+      // 创建同步状态图标
+      this.syncStatusIcon = document.createElement('div');
+      this.syncStatusIcon.id = 'syncStatusIcon';
+      this.syncStatusIcon.className = 'fixed bottom-4 right-4 p-2 rounded-full bg-gray-800 text-white opacity-0 transition-opacity duration-300';
+      this.syncStatusIcon.innerHTML = '🔄';
+      this.syncStatusIcon.style.zIndex = '1000';
+      
+      // 确保body元素已加载
+      if (document.body) {
+        document.body.appendChild(this.syncStatusIcon);
+      } else {
+        // 如果body还未加载完成，等待DOMContentLoaded事件
+        document.addEventListener('DOMContentLoaded', () => {
+          document.body.appendChild(this.syncStatusIcon);
+        });
+      }
+    } catch (error) {
+      console.error('初始化同步状态图标失败:', error);
+    }
   }
 
   // 更新同步状态图标
@@ -398,7 +655,9 @@ class SyncManager {
         this.syncStatusIcon.style.animation = 'none';
         this.syncStatusIcon.innerHTML = '✅';
         setTimeout(() => {
-          this.syncStatusIcon.style.opacity = '0';
+          if (this.syncStatusIcon) {
+            this.syncStatusIcon.style.opacity = '0';
+          }
         }, 2000);
         break;
       case 'error':
@@ -406,7 +665,9 @@ class SyncManager {
         this.syncStatusIcon.style.animation = 'none';
         this.syncStatusIcon.innerHTML = '❌';
         setTimeout(() => {
-          this.syncStatusIcon.style.opacity = '0';
+          if (this.syncStatusIcon) {
+            this.syncStatusIcon.style.opacity = '0';
+          }
         }, 2000);
         break;
       default:
@@ -424,11 +685,26 @@ class SyncManager {
     this.syncDebounceTimer = setTimeout(async () => {
       if (this.syncInProgress) return;
       
-      this.syncInProgress = true;
-      this.updateSyncStatus('syncing');
-      showToast('正在同步数据到云端...', 'info');
-
+      // 检查页面是否活跃
+      if (!this.isPageActive) {
+        console.log('页面不活跃，跳过同步');
+        return;
+      }
+      
+      // 尝试获取同步锁
+      const lockAcquired = await this.acquireSyncLock();
+      if (!lockAcquired) {
+        console.log('无法获取同步锁，跳过同步');
+        return;
+      }
+      
       try {
+        this.syncInProgress = true;
+        this.updateSyncStatus('syncing');
+        
+        // 显示Toast提示，不再检查页面类型
+        showToast('正在同步数据到云端...', 'info');
+
         // 确保 WebDAV 客户端已初始化
         if (!this.webdavClient && this.credentialId) {
           this.webdavClient = new WebDAVClient(this.credentialId);
@@ -437,17 +713,32 @@ class SyncManager {
         const success = await this.syncToCloud();
         if (success) {
           this.updateSyncStatus('success');
+          
+          // 显示Toast提示，不再检查页面类型
           showToast('数据已成功同步到云端', 'success');
+          
+          // 广播同步完成消息
+          this.syncChannel.postMessage({
+            type: 'syncComplete',
+            pageId: this.pageId,
+            lastSyncTime: this.lastSyncTime
+          });
         } else {
           this.updateSyncStatus('error');
+          
+          // 显示Toast提示，不再检查页面类型
           showToast('同步到云端失败，请检查网络连接', 'error');
         }
       } catch (error) {
         console.error('同步失败:', error);
         this.updateSyncStatus('error');
+        
+        // 显示Toast提示，不再检查页面类型
         showToast('同步到云端失败，请稍后重试', 'error');
       } finally {
         this.syncInProgress = false;
+        // 释放同步锁
+        this.releaseSyncLock();
       }
     }, 3000); // 3秒防抖延迟
   }
@@ -686,6 +977,21 @@ class SyncManager {
     }
 
     try {
+      // 检查页面是否活跃
+      if (!this.isPageActive) {
+        console.log('页面不活跃，跳过同步');
+        return false;
+      }
+      
+      // 确保持有同步锁
+      if (!this.isHoldingLock()) {
+        const lockAcquired = await this.acquireSyncLock();
+        if (!lockAcquired) {
+          console.log('无法获取同步锁，跳过同步');
+          return false;
+        }
+      }
+
       // 先测试连接
       const connected = await this.webdavClient.testConnection();
       if (!connected) {
@@ -716,6 +1022,11 @@ class SyncManager {
     } catch (error) {
       console.error('同步过程发生错误:', error);
       return false;
+    } finally {
+      // 如果是由此方法获取的锁，则释放
+      if (this.isHoldingLock()) {
+        this.releaseSyncLock();
+      }
     }
   }
 
@@ -740,7 +1051,7 @@ class SyncManager {
       return false;
     }
 
-    // 显示同步中的提示
+    // 显示同步中的提示，不再检查页面类型
     showToast('正在从云端同步数据...', 'info');
 
     // 设置同步标志
@@ -776,6 +1087,19 @@ class SyncManager {
     }
 
     try {
+      // 检查页面是否活跃
+      if (!this.isPageActive) {
+        console.log('页面不活跃，跳过从云端同步');
+        return false;
+      }
+      
+      // 尝试获取同步锁
+      const lockAcquired = await this.acquireSyncLock();
+      if (!lockAcquired) {
+        console.log('无法获取同步锁，跳过从云端同步');
+        return false;
+      }
+
       // 先测试连接
       const connected = await this.webdavClient.testConnection();
       if (!connected) {
@@ -793,6 +1117,11 @@ class SyncManager {
       console.error('从云端同步过程发生错误:', error);
       showToast('从云端同步失败，请稍后重试', 'error');
       return false;
+    } finally {
+      // 释放同步锁
+      if (this.isHoldingLock()) {
+        this.releaseSyncLock();
+      }
     }
   }
 
@@ -931,8 +1260,17 @@ class SyncManager {
   startAutoSync() {
     this.stopAutoSync(); // 先停止现有的定时器
     this.autoSyncTimer = setInterval(async () => {
-      if (this.syncEnabled) {
-        await this.syncToCloud();
+      if (this.syncEnabled && this.isPageActive) {
+        // 尝试获取同步锁
+        const lockAcquired = await this.acquireSyncLock();
+        if (lockAcquired) {
+          try {
+            await this.syncToCloud();
+          } finally {
+            // 释放同步锁
+            this.releaseSyncLock();
+          }
+        }
       }
     }, this.syncInterval);
   }
@@ -948,6 +1286,21 @@ class SyncManager {
   // 开启云同步
   async enableCloudSync(credentialId) {
     try {
+      // 检查页面是否活跃
+      if (!this.isPageActive) {
+        console.log('页面不活跃，跳过开启云同步');
+        showToast('当前页面不活跃，请在活跃页面操作', 'warning');
+        return;
+      }
+      
+      // 尝试获取同步锁
+      const lockAcquired = await this.acquireSyncLock();
+      if (!lockAcquired) {
+        console.log('无法获取同步锁，跳过开启云同步');
+        showToast('其他页面正在执行同步操作，请稍后再试', 'warning');
+        return;
+      }
+
       // 1. 初始化WebDAV客户端
       const initSuccess = await this.init(credentialId);
       if (!initSuccess) {
@@ -973,7 +1326,7 @@ class SyncManager {
           // 刷新整个页面
           setTimeout(() => {
             window.location.reload();
-          }, 2500); // 延迟2.5秒后刷新，让用户看到成功提示
+          }, 3000); // 延迟3秒后刷新，让用户看到成功提示
         } else {
           showToast('云同步已开启，但从云端同步数据失败', 'warning');
         }
@@ -1000,6 +1353,11 @@ class SyncManager {
     } catch (error) {
       console.error('开启云同步失败:', error);
       throw error;
+    } finally {
+      // 释放同步锁
+      if (this.isHoldingLock()) {
+        this.releaseSyncLock();
+      }
     }
   }
 
@@ -1135,4 +1493,12 @@ class SyncManager {
 }
 
 // 创建全局同步管理器实例
-window.syncManager = new SyncManager(); 
+// 修改为在DOM加载完成后初始化
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    window.syncManager = new SyncManager();
+  });
+} else {
+  // 如果DOM已经加载完成，直接初始化
+  window.syncManager = new SyncManager();
+} 
