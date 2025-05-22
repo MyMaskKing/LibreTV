@@ -191,15 +191,16 @@ jobs:
             echo -e "$FILTERED_CONFLICT_FILES" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
             
-            echo "📋 创建Issue报告冲突情况..."
-            exit 1
+            # 设置标志，表示需要创建Issue
+            echo "NEED_CREATE_ISSUE=true" >> $GITHUB_ENV
+            
+            echo "📋 检测到冲突文件，将创建Issue报告冲突情况..."
           else
             echo "✅ 所有冲突已自动处理"
-            exit 0
           fi
 
       - name: 创建Issue报告
-        if: failure()
+        if: env.NEED_CREATE_ISSUE == 'true'
         uses: actions/github-script@v6
         with:
           script: |
