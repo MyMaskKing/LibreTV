@@ -96,7 +96,9 @@ jobs:
           echo "📝 发现以下冲突文件（已排除workflow文件）："
           echo -e "$FILTERED_CONFLICT_FILES"
           
-          BACKUP_FILES=""
+          # 创建临时文件存储备份文件列表
+          BACKUP_FILES_LIST="/tmp/backup_files_list.txt"
+          > "$BACKUP_FILES_LIST"  # 清空文件
           
           # 修复：逐行处理冲突文件
           echo -e "$FILTERED_CONFLICT_FILES" | while IFS= read -r file; do
@@ -133,13 +135,23 @@ jobs:
             
             if [ -f "$backup_file" ]; then
               echo "✅ 备份文件创建成功: $backup_file"
-              BACKUP_FILES="${BACKUP_FILES}\n$backup_file"
+              # 将备份文件路径添加到列表中，保留相对目录结构
+              backup_relative_path="${file_dir}/${backup_name}"
+              # 清理路径中的多余的 ./ 
+              backup_relative_path=$(echo "$backup_relative_path" | sed 's|^\./||' | sed 's|/\./|/|g')
+              echo "$backup_relative_path" >> "$BACKUP_FILES_LIST"
               
               echo "📥 使用main分支版本..."
               git checkout main -- "$file"
               git add "$file"
             fi
           done
+          
+          # 读取备份文件列表
+          BACKUP_FILES=""
+          if [ -f "$BACKUP_FILES_LIST" ]; then
+            BACKUP_FILES=$(cat "$BACKUP_FILES_LIST")
+          fi
           
           # 清理当前状态
           git reset --hard HEAD
@@ -169,10 +181,14 @@ jobs:
           git commit -m "同步main分支代码，并保存冲突文件备份" || echo "没有需要提交的更改"
           git push --force origin custom-dev
           
-          
+          # 设置环境变量用于创建Issue
           if [ ! -z "$BACKUP_FILES" ]; then
             echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
-            echo -e "$BACKUP_FILES" >> $GITHUB_ENV
+            echo "$BACKUP_FILES" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            
+            echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
+            echo -e "$FILTERED_CONFLICT_FILES" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
             
             echo "📋 创建Issue报告冲突情况..."
