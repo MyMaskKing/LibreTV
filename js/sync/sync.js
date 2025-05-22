@@ -5,6 +5,14 @@ const DEFAULT_WEBDAV_CONFIG = {
   password: 'webdav'
 };
 
+// 公告栏配置
+const ANNOUNCEMENT_CONFIG = {
+  url: 'https://alist.10023456.xyz/d/share/webdav/libretv-advice.txt?sign=Hx1OSgOgS7yr_5O3H3m5-DAzZ0Bvy6Dut4cnzwcv1tU=:0',
+  checkInterval: 24 * 60 * 60 * 1000, // 24小时检查一次
+  storageKey: 'lastAnnouncementId', // 存储已显示的公告ID
+  checkTimeKey: 'lastAnnouncementCheckTime' // 上次检查公告的时间
+};
+
 // 不参与同步的键名黑名单
 const SYNC_BLACKLIST = [
   'sessionId',
@@ -157,6 +165,9 @@ class SyncManager {
     this.addStyles();
     this.setupEventListeners();
     this.initUI();
+    
+    // 检查公告
+    this.checkAnnouncement();
   }
 
   // 设置事件监听器
@@ -387,6 +398,76 @@ class SyncManager {
       #syncStatusIcon {
         cursor: pointer;
         user-select: none;
+      }
+      
+      /* 公告栏样式 */
+      .announcement-modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: rgba(0, 0, 0, 0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        pointer-events: none;
+      }
+      
+      .announcement-modal.show {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      
+      .announcement-container {
+        background-color: #111;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 20px;
+        max-width: 90%;
+        width: 500px;
+        max-height: 80vh;
+        overflow-y: auto;
+        position: relative;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      }
+      
+      .announcement-title {
+        font-size: 1.5rem;
+        margin-bottom: 15px;
+        color: white;
+        text-align: center;
+        background: linear-gradient(to right, #4f46e5, #9333ea, #ec4899);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: bold;
+      }
+      
+      .announcement-content {
+        color: #e0e0e0;
+        line-height: 1.6;
+        margin-bottom: 20px;
+        white-space: pre-line;
+      }
+      
+      .announcement-close {
+        display: block;
+        margin: 0 auto;
+        padding: 8px 16px;
+        background: linear-gradient(to right, #4f46e5, #9333ea, #ec4899);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+      
+      .announcement-close:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
       }
     `;
     document.head.appendChild(style);
@@ -815,6 +896,125 @@ class SyncManager {
       console.error('关闭云同步失败:', error);
       throw error;
     }
+  }
+
+  // 检查公告
+  async checkAnnouncement() {
+    try {
+      // 检查上次检查时间
+      const lastCheckTime = parseInt(localStorage.getItem(ANNOUNCEMENT_CONFIG.checkTimeKey) || '0');
+      const now = Date.now();
+      
+      // 如果距离上次检查不到24小时，则跳过
+      if (now - lastCheckTime < ANNOUNCEMENT_CONFIG.checkInterval) {
+        console.log('距离上次检查公告时间不足24小时，跳过检查');
+        return;
+      }
+      
+      // 更新检查时间
+      localStorage.setItem(ANNOUNCEMENT_CONFIG.checkTimeKey, now.toString());
+      
+      // 获取公告内容
+      console.log('正在获取公告内容...');
+      const response = await fetch(ANNOUNCEMENT_CONFIG.url);
+      if (!response.ok) {
+        console.error('获取公告失败:', response.status, await response.text());
+        
+        // 如果是401错误，可能是签名过期，记录详细信息
+        if (response.status === 401) {
+          console.error('授权错误，可能是签名已过期，请更新签名');
+        }
+        return;
+      }
+      
+      // 获取纯文本内容
+      const announcementText = await response.text();
+      console.log('获取到公告内容:', announcementText.substring(0, 50) + (announcementText.length > 50 ? '...' : ''));
+      
+      if (!announcementText || announcementText.trim() === '') {
+        console.log('公告内容为空');
+        return;
+      }
+      
+      // 计算公告内容的哈希作为ID
+      const announcementId = await this.hashString(announcementText);
+      
+      // 检查是否已经显示过该公告
+      const lastAnnouncementId = localStorage.getItem(ANNOUNCEMENT_CONFIG.storageKey);
+      if (lastAnnouncementId === announcementId) {
+        console.log('该公告已显示过');
+        return;
+      }
+      
+      // 显示公告
+      this.showAnnouncement(announcementText, announcementId);
+      
+    } catch (error) {
+      console.error('检查公告时出错:', error);
+    }
+  }
+  
+  // 计算字符串的哈希值
+  async hashString(str) {
+    // 使用简单的哈希算法
+    if (window._jsSha256) {
+      return window._jsSha256(str);
+    }
+    
+    // 如果没有sha256库，使用简单的哈希函数
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash.toString(16);
+  }
+  
+  // 显示公告
+  showAnnouncement(content, announcementId) {
+    // 创建公告模态框
+    const modal = document.createElement('div');
+    modal.className = 'announcement-modal';
+    
+    modal.innerHTML = `
+      <div class="announcement-container">
+        <h3 class="announcement-title">LibreTV 公告</h3>
+        <div class="announcement-content">${this.formatAnnouncementContent(content)}</div>
+        <button class="announcement-close">我知道了</button>
+      </div>
+    `;
+    
+    // 添加到页面
+    document.body.appendChild(modal);
+    
+    // 显示模态框
+    setTimeout(() => {
+      modal.classList.add('show');
+    }, 100);
+    
+    // 添加关闭按钮事件
+    const closeButton = modal.querySelector('.announcement-close');
+    closeButton.addEventListener('click', () => {
+      modal.classList.remove('show');
+      setTimeout(() => {
+        modal.remove();
+      }, 300);
+      
+      // 保存已显示的公告ID
+      localStorage.setItem(ANNOUNCEMENT_CONFIG.storageKey, announcementId);
+    });
+  }
+  
+  // 格式化公告内容
+  formatAnnouncementContent(content) {
+    // 处理换行符
+    let formatted = content.replace(/\n/g, '<br>');
+    
+    // 处理链接
+    formatted = formatted.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color:#4f46e5;text-decoration:underline;">$1</a>');
+    
+    return formatted;
   }
 }
 
