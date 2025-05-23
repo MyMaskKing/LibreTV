@@ -41,8 +41,14 @@ jobs:
             echo "❌ 错误：排除文件配置 $EXCLUDE_FILES_CONFIG 不存在"
             exit 1
           fi
+          
+          # 创建临时目录
           mkdir -p "$TEMP_DIR"
+          
+          # 备份配置文件
           cp "$EXCLUDE_FILES_CONFIG" "$TEMP_DIR/exclude_config.bak"
+          
+          # 读取并处理排除文件列表
           EXCLUDE_PATTERNS=()
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
@@ -51,97 +57,110 @@ jobs:
             line=$(echo "$line" | xargs)
             if [[ -n "$line" ]]; then
               EXCLUDE_PATTERNS+=("$line")
-              echo "  - 排除: $line"
+              echo "📋 读取到需要保留的文件/目录: $line"
             fi
           done < "$EXCLUDE_FILES_CONFIG"
+          
+          # 备份需要保留的文件
           for pattern in "${EXCLUDE_PATTERNS[@]}"; do
             if [[ "$pattern" == */ ]]; then
-              mkdir -p "$TEMP_DIR/$pattern"
-              cp -r "$pattern"* "$TEMP_DIR/$pattern" 2>/dev/null || true
+              # 目录模式
+              if [ -d "$pattern" ]; then
+                mkdir -p "$TEMP_DIR/$pattern"
+                cp -r "$pattern"* "$TEMP_DIR/$pattern" 2>/dev/null || true
+                echo "📦 备份目录: $pattern"
+              fi
             else
-              target_dir="$TEMP_DIR/$(dirname "$pattern")"
-              mkdir -p "$target_dir"
-              cp -r $pattern "$target_dir/" 2>/dev/null || true
+              # 文件模式
+              if [ -f "$pattern" ]; then
+                target_dir="$TEMP_DIR/$(dirname "$pattern")"
+                mkdir -p "$target_dir"
+                cp -r "$pattern" "$target_dir/" 2>/dev/null || true
+                echo "📄 备份文件: $pattern"
+              fi
             fi
           done
+          
+          # 将排除模式列表保存到环境变量
+          {
+            echo "EXCLUDE_PATTERNS<<EOF"
+            printf "%s\n" "${EXCLUDE_PATTERNS[@]}"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
-      - name: 合并main分支到custom-dev
-        id: merge
+      - name: 准备分支
+        id: prepare
         run: |
+          echo "🔄 获取最新代码..."
           git fetch origin
           git fetch origin main:main
+          
+          echo "🔍 检查custom-dev分支..."
           if ! git show-ref --verify --quiet refs/remotes/origin/custom-dev; then
-            git checkout -b custom-dev
+            echo "⚠️ custom-dev分支不存在，从main创建..."
+            git checkout -b custom-dev origin/main
           else
+            echo "✅ 切换到custom-dev分支"
             git checkout custom-dev
             git reset --hard origin/custom-dev
           fi
-          git merge --abort || true
-          if git merge origin/main --no-commit; then
-            echo "MERGE_CONFLICT=false" >> $GITHUB_ENV
-          else
-            echo "MERGE_CONFLICT=true" >> $GITHUB_ENV
-          fi
 
-      - name: 检查并处理合并冲突
-        if: env.MERGE_CONFLICT == 'true'
-        id: handle_conflict
+      - name: 智能合并
+        id: merge
         run: |
-          CONFLICT_FILES=$(git status --porcelain | grep "^UU" | cut -c4-)
-          if [ -z "$CONFLICT_FILES" ]; then
-            echo "❌ 没有检测到冲突文件，可能是其他错误"
-            git status
-            exit 1
-          fi
-          FILTERED_CONFLICT_FILES=""
-          while IFS= read -r file; do
-            if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
-              FILTERED_CONFLICT_FILES="${FILTERED_CONFLICT_FILES}${file}\n"
-            fi
-          done <<< "$CONFLICT_FILES"
-          FILTERED_CONFLICT_FILES=$(echo -e "$FILTERED_CONFLICT_FILES" | sed '$ s/\\n$//')
-          echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
-          echo -e "$FILTERED_CONFLICT_FILES" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-          BACKUP_FILES=""
-          REPO_ROOT=$(pwd)
-          BACKUP_ROOT="../backup_files"
-          rm -rf "$BACKUP_ROOT"
-          mkdir -p "$BACKUP_ROOT"
-          while IFS= read -r file; do
-            if [ -z "$file" ]; then
-              continue
-            fi
-            if [ ! -f "$file" ]; then
-              continue
-            fi
-            file_dir=$(dirname "$file")
-            backup_dir="$BACKUP_ROOT/$file_dir"
-            mkdir -p "$backup_dir"
-            backup_name="$(basename "$file").$(date +%Y%m%d_%H%M%S).backup"
-            backup_file="$backup_dir/$backup_name"
-            cp "$file" "$backup_file" || true
-            if [ -f "$backup_file" ]; then
-              BACKUP_FILES="${BACKUP_FILES}\n$backup_file"
-              git checkout origin/main -- "$file"
-              git add "$file"
-            fi
-          done <<< "$FILTERED_CONFLICT_FILES"
-          git reset --hard HEAD
-          git clean -f -d
+          echo "🔄 开始智能合并..."
+          
+          # 1. 先将所有文件重置为main分支版本
+          echo "📥 应用main分支的所有更改..."
           git checkout origin/main -- .
-          rm -rf .github/workflows/*
-          git checkout custom-dev -- .github/workflows/
-          if [ -d "$BACKUP_ROOT" ]; then
-            cp -r "$BACKUP_ROOT"/* .
-            rm -rf "$BACKUP_ROOT"
+          
+          # 2. 恢复exclude列表中的文件
+          while IFS= read -r pattern; do
+            if [ -z "$pattern" ]; then
+              continue
+            fi
+            
+            if [ -e "$TEMP_DIR/$pattern" ]; then
+              echo "🔄 处理文件: $pattern"
+              
+              # 检查文件在main分支是否有更改
+              if git diff --quiet origin/main origin/custom-dev -- "$pattern" 2>/dev/null; then
+                echo "  ✓ 文件无差异，使用原文件"
+                cp -r "$TEMP_DIR/$pattern" "$pattern"
+              else
+                echo "  ⚠️ 检测到差异，尝试合并..."
+                # 尝试三方合并
+                if git merge-file "$pattern" "$TEMP_DIR/$pattern" "$(git show origin/main:$pattern 2>/dev/null || echo /dev/null)"; then
+                  echo "  ✅ 自动合并成功"
+                else
+                  echo "  ❌ 合并冲突"
+                  # 记录冲突文件
+                  echo "$pattern" >> "$TEMP_DIR/conflict_files.txt"
+                  # 暂时使用main版本
+                  git checkout origin/main -- "$pattern"
+                fi
+              fi
+            fi
+          done <<< "$EXCLUDE_PATTERNS"
+          
+          # 3. 检查是否有冲突文件
+          if [ -f "$TEMP_DIR/conflict_files.txt" ]; then
+            echo "MERGE_CONFLICT=true" >> $GITHUB_ENV
+            echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
+            cat "$TEMP_DIR/conflict_files.txt" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          else
+            echo "MERGE_CONFLICT=false" >> $GITHUB_ENV
           fi
+          
+          # 4. 提交更改
           git add -A
-          git commit -m "同步main分支代码，并保存冲突文件备份" || echo "没有需要提交的更改"
-          git push --force origin custom-dev
-          echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
-          echo -e "$BACKUP_FILES" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          if git diff --cached --quiet; then
+            echo "✅ 没有需要提交的更改"
+          else
+            git commit -m "同步main分支代码，保留custom-dev分支的自定义修改"
+            git push -f origin custom-dev
+          fi
 
       - name: 创建Issue报告
         if: env.MERGE_CONFLICT == 'true'
@@ -151,29 +170,29 @@ jobs:
             const issueBody = `
             # main -> custom-dev 同步冲突报告
             
-            在同步过程中发现以下文件存在冲突，已自动使用main分支的代码并备份原文件。
+            在同步过程中发现以下文件存在冲突，已暂时使用main分支的版本。
+            这些文件都在 \`sync-exclude.txt\` 中列出，需要保留custom-dev的自定义修改。
             
             ## 冲突文件列表
-            \n\n\`\`\`
+            \`\`\`
             ${process.env.CONFLICT_FILES}
             \`\`\`
             
-            ## 备份文件
-            已在每个冲突文件的同目录下创建备份文件：
-            \n\n\`\`\`
-            ${process.env.BACKUP_FILES}
-            \`\`\`
+            ## 备份位置
+            所有文件的custom-dev版本已备份在 \`${process.env.TEMP_DIR}\` 目录下，保持原有目录结构。
             
             ## 处理说明
-            1. 所有冲突文件已使用main分支的版本
-            2. custom-dev分支的原始代码已在同目录下备份
-            3. 如需恢复或合并自定义代码，请参考备份文件
+            1. 目前这些文件使用了main分支的版本
+            2. custom-dev分支的原始代码已备份
+            3. 请手动合并这些文件的更改
             
             ## 手动处理步骤
             1. 检查备份文件内容
-            2. 如需修改，请在custom-dev分支上进行更改
-            3. 确保更改后的代码与main分支的改动不冲突
+            2. 在custom-dev分支上手动合并更改
+            3. 确保合并后的代码与main分支的改动不冲突
+            4. 提交并推送更改到custom-dev分支
             `;
+            
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -181,58 +200,6 @@ jobs:
               body: issueBody,
               labels: ['sync-conflict']
             });
-
-      - name: 恢复自定义文件并提交
-        if: env.MERGE_CONFLICT == 'false'
-        run: |
-          cp "$TEMP_DIR/exclude_config.bak" "$EXCLUDE_FILES_CONFIG"
-          EXCLUDE_PATTERNS=()
-          while IFS= read -r line || [[ -n "$line" ]]; do
-            if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-              continue
-            fi
-            line=$(echo "$line" | xargs)
-            if [[ -n "$line" ]]; then
-              EXCLUDE_PATTERNS+=("$line")
-            fi
-          done < "$EXCLUDE_FILES_CONFIG"
-          RESTORED_COUNT=0
-          for pattern in "${EXCLUDE_PATTERNS[@]}"; do
-            if [[ "$pattern" == */ ]]; then
-              backup_dir="$TEMP_DIR/$pattern"
-              if [ -d "$backup_dir" ]; then
-                find "$backup_dir" -type f | while read backup_file; do
-                  rel_path=${backup_file#"$TEMP_DIR/"}
-                  target_dir=$(dirname "$rel_path")
-                  mkdir -p "$target_dir"
-                  cp "$backup_file" "$rel_path"
-                  RESTORED_COUNT=$((RESTORED_COUNT + 1))
-                done
-              fi
-            else
-              backup_pattern="$TEMP_DIR/$pattern"
-              shopt -s nullglob
-              backup_files=($backup_pattern)
-              shopt -u nullglob
-              for backup_file in "${backup_files[@]}"; do
-                if [ -f "$backup_file" ]; then
-                  rel_path=${backup_file#"$TEMP_DIR/"}
-                  target_dir=$(dirname "$rel_path")
-                  mkdir -p "$target_dir"
-                  cp "$backup_file" "$rel_path"
-                  RESTORED_COUNT=$((RESTORED_COUNT + 1))
-                fi
-              done
-            fi
-          done
-          git add -A
-          if git diff --cached --quiet; then
-            echo "✅ 没有需要提交的更改，同步完成"
-          else
-            git commit -m "同步main分支代码，保留custom-dev分支的自定义修改"
-            git push origin custom-dev
-            echo "✅ 同步完成"
-          fi
 
       - name: 清理临时文件
         if: always()
@@ -242,4 +209,8 @@ jobs:
       
       - name: 通知结果
         run: |
-          echo "✅ 智能同步流程已完成。custom-dev 分支现在包含 main 分支的代码，并保留了排除列表中指定的自定义修改。" 
+          if [ "$MERGE_CONFLICT" = "true" ]; then
+            echo "⚠️ 同步完成，但有冲突文件需要处理，请查看创建的Issue。"
+          else
+            echo "✅ 同步完成！main分支代码已同步到custom-dev，并保留了自定义修改。"
+          fi
