@@ -120,25 +120,58 @@ jobs:
               continue
             fi
             
-            if [ -e "$TEMP_DIR/$pattern" ]; then
-              echo "🔄 处理文件: $pattern"
+            echo "🔄 处理: $pattern"
+            
+            # 跳过注释行
+            if [[ "$pattern" =~ ^[[:space:]]*# ]]; then
+              continue
+            fi
+            
+            # 处理目录
+            if [[ "$pattern" == */ ]]; then
+              if [ -d "$TEMP_DIR/$pattern" ]; then
+                echo "  📂 恢复目录: $pattern"
+                rm -rf "$pattern"
+                cp -r "$TEMP_DIR/$pattern" "$(dirname "$pattern")/"
+              fi
+              continue
+            fi
+            
+            # 处理单个文件
+            if [ -f "$TEMP_DIR/$pattern" ]; then
+              echo "  📄 处理文件: $pattern"
               
               # 检查文件在main分支是否有更改
               if git diff --quiet origin/main origin/custom-dev -- "$pattern" 2>/dev/null; then
-                echo "  ✓ 文件无差异，使用原文件"
-                cp -r "$TEMP_DIR/$pattern" "$pattern"
+                echo "    ✓ 文件无差异，使用原文件"
+                cp -f "$TEMP_DIR/$pattern" "$pattern"
               else
-                echo "  ⚠️ 检测到差异，尝试合并..."
+                echo "    ⚠️ 检测到差异，尝试合并..."
+                
+                # 创建临时文件用于合并
+                TEMP_MERGE_DIR="$TEMP_DIR/merge"
+                mkdir -p "$TEMP_MERGE_DIR"
+                BASE_FILE="$TEMP_MERGE_DIR/base"
+                OURS_FILE="$TEMP_MERGE_DIR/ours"
+                THEIRS_FILE="$TEMP_MERGE_DIR/theirs"
+                
+                # 获取文件的各个版本
+                git show "origin/main:$pattern" > "$BASE_FILE" 2>/dev/null || touch "$BASE_FILE"
+                cp "$TEMP_DIR/$pattern" "$OURS_FILE"
+                git show "origin/main:$pattern" > "$THEIRS_FILE" 2>/dev/null || touch "$THEIRS_FILE"
+                
                 # 尝试三方合并
-                if git merge-file "$pattern" "$TEMP_DIR/$pattern" "$(git show origin/main:$pattern 2>/dev/null || echo /dev/null)"; then
-                  echo "  ✅ 自动合并成功"
+                if git merge-file -p "$OURS_FILE" "$BASE_FILE" "$THEIRS_FILE" > "$pattern" 2>/dev/null; then
+                  echo "    ✅ 自动合并成功"
                 else
-                  echo "  ❌ 合并冲突"
-                  # 记录冲突文件
+                  echo "    ❌ 合并冲突"
                   echo "$pattern" >> "$TEMP_DIR/conflict_files.txt"
                   # 暂时使用main版本
                   git checkout origin/main -- "$pattern"
                 fi
+                
+                # 清理临时合并文件
+                rm -rf "$TEMP_MERGE_DIR"
               fi
             fi
           done <<< "$EXCLUDE_PATTERNS"
