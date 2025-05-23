@@ -15,6 +15,8 @@
     <script src="js/version-check.js"></script>
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="css/player.css">
+<<<<<<< HEAD
+=======
     
     <!-- Add optimized player loading styles -->
     <style>
@@ -145,6 +147,7 @@
     <meta http-equiv="Cache-Control" content="no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
+>>>>>>> main
 </head>
 <body>
     <header class="player-header-fixed p-4 flex items-center border-b border-[#333] gap-2">
@@ -157,6 +160,24 @@
             </button>
         </div>
         <h2 id="videoTitle" class="text-xl font-semibold flex-1 text-center overflow-x-auto whitespace-nowrap truncate custom-title-scroll"></h2>
+<<<<<<< HEAD
+        <!-- 修改返回按钮，提供两个选项：返回上一页和返回首页 -->
+        <div class="flex space-x-2">
+            <a href="javascript:void(0);" onclick="window.close();" class="px-4 py-2 bg-[#222] hover:bg-[#333] border border-[#333] rounded-lg transition-colors flex items-center min-w-0">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 12H5M12 19l-7-7 7-7" />
+                </svg>
+                <span class="back-btn-text">返回</span>
+            </a>
+            <a href="/" class="px-4 py-2 bg-[#222] hover:bg-[#333] border border-[#333] rounded-lg transition-colors flex items-center min-w-0 home-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 21V9.5l-7-5-7 5V21a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2z" />
+                  <path d="M9 22V12h6v10" />
+                </svg>
+                <span class="home-btn-text">首页</span>
+            </a>
+        </div>
+=======
         <a href="#" id="goBack" onclick="goBack(event)" class="px-4 py-2 bg-[#222] hover:bg-[#333] border border-[#333] rounded-lg transition-colors flex items-center min-w-0 home-btn">
             <svg class="w-5 h-5 mr-1" viewBox="0 0 24 24" fill="#ffffff" xmlns="http://www.w3.org/2000/svg">
                 <path d="M5.25 11h15a1.5 1.5 0 1 1 0 3H5.25a1.5 1.5 0 0 1 0-3z"/>
@@ -164,6 +185,7 @@
             </svg>
             <span class="home-btn-text">上一页</span>
         </a>
+>>>>>>> main
     </header>
 
     <!-- 密码验证弹窗 -->
@@ -337,6 +359,60 @@
         
         // 注入服务器端环境变量 (将由服务器端替换)
         // PASSWORD 变量将在这里被服务器端注入
+<<<<<<< HEAD
+        window.__ENV__.PASSWORD = "{{PASSWORD}}";        // 改进返回上一页功能
+        function goBack(event) {
+            // 防止默认链接行为
+            if (event) event.preventDefault();
+            
+            // 1. 优先检查URL参数中的returnUrl
+            const urlParams = new URLSearchParams(window.location.search);
+            const returnUrl = urlParams.get('returnUrl');
+            
+            if (returnUrl) {
+                // 如果URL中有returnUrl参数，优先使用
+                window.location.href = decodeURIComponent(returnUrl);
+                return;
+            }
+            
+            // 2. 检查localStorage中保存的lastPageUrl
+            const lastPageUrl = localStorage.getItem('lastPageUrl');
+            if (lastPageUrl && lastPageUrl !== window.location.href) {
+                window.location.href = lastPageUrl;
+                return;
+            }
+            
+            // 3. 检查是否是从搜索页面进入的播放器
+            const referrer = document.referrer;
+            
+            // 检查 referrer 是否包含搜索参数
+            if (referrer && (referrer.includes('/s=') || referrer.includes('?s='))) {
+                // 如果是从搜索页面来的，返回到搜索页面
+                window.location.href = referrer;
+                return;
+            }
+            
+            // 4. 如果是在iframe中打开的，尝试关闭iframe
+            if (window.self !== window.top) {
+                try {
+                    // 尝试调用父窗口的关闭播放器函数
+                    window.parent.closeVideoPlayer && window.parent.closeVideoPlayer();
+                    return;
+                } catch (e) {
+                    console.error('调用父窗口closeVideoPlayer失败:', e);
+                }
+            }
+            
+            // 5. 无法确定上一页，则返回首页
+            if (!referrer || referrer === '') {
+                window.location.href = '/';
+                return;
+            }
+            
+            // 6. 以上都不满足，使用默认行为：返回上一页
+            window.history.back();
+        }
+=======
         window.__ENV__.PASSWORD = "{{PASSWORD}}";
 
         // 修复 home 跳转
@@ -373,6 +449,7 @@
                 }
             });
         });
+>>>>>>> main
     </script>
 </body>
 </html>

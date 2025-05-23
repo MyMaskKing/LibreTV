@@ -8,7 +8,11 @@ body, html {
 }
 .player-container {
     width: 100%;
+<<<<<<< HEAD
+    max-width: 1200px;
+=======
     max-width: 1000px;
+>>>>>>> main
     margin: 0 auto;
 }
 #player {

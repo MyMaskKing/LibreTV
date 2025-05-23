@@ -1063,6 +1063,68 @@ function playVideo(url, vod_name, sourceCode, episodeIndex = 0) {
     } catch (e) {
         // 忽略错误
         console.log('解析视频URL获取ID失败:', e);
+<<<<<<< HEAD
+    }
+    
+    // 构建播放页面URL，使用watch.html作为中间跳转页
+    let watchUrl = `watch.html?id=${videoId}&source=${sourceCode || ''}&url=${encodeURIComponent(url)}&index=${episodeIndex}&title=${encodeURIComponent(vod_name || '')}`;
+    
+    // 添加返回URL参数
+    watchUrl += `&back=${encodeURIComponent(currentPath)}`;
+    
+    // 保存当前状态到localStorage
+    try {
+        localStorage.setItem('currentVideoTitle', vod_name || '未知视频');
+        localStorage.setItem('currentEpisodes', JSON.stringify(currentEpisodes));
+        localStorage.setItem('currentEpisodeIndex', episodeIndex);
+        localStorage.setItem('currentSourceCode', sourceCode || '');
+        localStorage.setItem('lastPlayTime', Date.now());
+        localStorage.setItem('lastSearchPage', currentPath);
+        localStorage.setItem('lastPageUrl', currentPath);  // 确保保存返回页面URL
+    } catch (e) {
+        console.error('保存播放状态失败:', e);
+    }
+    
+    // 在新窗口/标签页中打开播放页面
+    window.open(watchUrl, '_blank');
+}
+
+// 弹出播放器页面
+function showVideoPlayer(url) {
+    // 在打开播放器前，隐藏详情弹窗
+    const detailModal = document.getElementById('modal');
+    if (detailModal) {
+        detailModal.classList.add('hidden');
+    }
+    // 临时隐藏搜索结果和豆瓣区域，防止高度超出播放器而出现滚动条
+    document.getElementById('resultsArea').classList.add('hidden');
+    document.getElementById('doubanArea').classList.add('hidden');
+    // 在框架中打开播放页面
+    videoPlayerFrame = document.createElement('iframe');
+    videoPlayerFrame.id = 'VideoPlayerFrame';
+    videoPlayerFrame.className = 'fixed w-full h-screen z-40';
+    videoPlayerFrame.src = url;
+    document.body.appendChild(videoPlayerFrame);
+}
+
+// 关闭播放器页面
+function closeVideoPlayer() {
+    videoPlayerFrame = document.getElementById('VideoPlayerFrame');
+    if (videoPlayerFrame) {
+        videoPlayerFrame.remove();
+        // 恢复搜索结果显示
+        document.getElementById('resultsArea').classList.remove('hidden');
+        // 关闭播放器时也隐藏详情弹窗
+        const detailModal = document.getElementById('modal');
+        if (detailModal) {
+            detailModal.classList.add('hidden');
+        }
+        // 如果启用豆瓣区域则显示豆瓣区域
+        if (localStorage.getItem('doubanEnabled') === 'true') {
+            document.getElementById('doubanArea').classList.remove('hidden');
+        }
+    }
+=======
     }
     
     // 构建播放页面URL，使用watch.html作为中间跳转页
@@ -1126,6 +1188,7 @@ function closeVideoPlayer(home = false) {
     if (home) {
         resetToHome();
     }
+>>>>>>> main
 }
 
 // 播放上一集
