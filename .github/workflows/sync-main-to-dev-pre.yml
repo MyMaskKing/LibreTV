@@ -131,6 +131,7 @@ jobs:
           
           # 过滤冲突文件（排除 workflow 文件和配置的排除文件）
           FILTERED_CONFLICT_FILES=""
+          EXCLUDED_FILES=""
           while IFS= read -r file; do
             # 检查文件是否在排除列表中
             SHOULD_EXCLUDE=0
@@ -143,12 +144,14 @@ jobs:
               if [[ "$pattern" == */ ]]; then
                 if [[ "$file" == $pattern* ]]; then
                   SHOULD_EXCLUDE=1
+                  EXCLUDED_FILES="${EXCLUDED_FILES}${file}\n"
                   break
                 fi
               # 如果是文件模式
               else
                 if [[ "$file" == "$pattern" ]]; then
                   SHOULD_EXCLUDE=1
+                  EXCLUDED_FILES="${EXCLUDED_FILES}${file}\n"
                   break
                 fi
               fi
@@ -159,20 +162,23 @@ jobs:
             fi
           done <<< "$CONFLICT_FILES"
           
-          echo "📝 发现以下冲突文件（已排除workflow文件和配置的排除文件）："
+          echo "📝 发现以下需要使用main分支版本的文件："
           echo -e "$FILTERED_CONFLICT_FILES"
+          
+          echo "📝 发现以下需要保留custom-dev版本的文件："
+          echo -e "$EXCLUDED_FILES"
           
           # 创建临时文件存储备份文件列表
           BACKUP_FILES_LIST="/tmp/backup_files_list.txt"
           > "$BACKUP_FILES_LIST"  # 清空文件
           
-          # 修复：逐行处理冲突文件
-          echo -e "$FILTERED_CONFLICT_FILES" | while IFS= read -r file; do
+          # 处理需要保留的文件（在排除列表中的文件）
+          echo -e "$EXCLUDED_FILES" | while IFS= read -r file; do
             if [ -z "$file" ]; then
               continue
             fi
             
-            echo "🔄 处理文件: $file"
+            echo "🔄 处理需要保留的文件: $file"
             
             # 检查文件是否存在
             if [ ! -f "$file" ]; then
@@ -182,9 +188,7 @@ jobs:
             
             # 检查 custom-dev 是否修改了这个文件
             if git diff --quiet $base HEAD -- "$file"; then
-              echo "✨ $file 在custom-dev中未修改，自动使用main的版本"
-              git checkout --theirs "$file"
-              git add "$file"
+              echo "✨ $file 在custom-dev中未修改，跳过"
               continue
             fi
             
@@ -206,7 +210,17 @@ jobs:
               # 清理路径中的多余的 ./ 
               backup_relative_path=$(echo "$backup_relative_path" | sed 's|^\./||' | sed 's|/\./|/|g')
               echo "$backup_relative_path" >> "$BACKUP_FILES_LIST"
-              
+            fi
+          done
+          
+          # 处理其他冲突文件（直接使用main分支版本）
+          echo -e "$FILTERED_CONFLICT_FILES" | while IFS= read -r file; do
+            if [ -z "$file" ]; then
+              continue
+            fi
+            
+            echo "🔄 处理需要使用main版本的文件: $file"
+            if [ -f "$file" ]; then
               echo "📥 使用main分支版本..."
               git checkout main -- "$file"
               git add "$file"
