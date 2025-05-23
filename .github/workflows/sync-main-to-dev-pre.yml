@@ -91,66 +91,130 @@ jobs:
             fi
           done < "$EXCLUDE_FILES_CONFIG"
 
+          # 备份需要保留的文件
+          echo "💾 备份需要保留的文件..."
+          for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+            # 处理目录模式（以/结尾）
+            if [[ "$pattern" == */ ]]; then
+              echo "📄 备份目录: $pattern"
+              mkdir -p "$TEMP_DIR/$pattern"
+              cp -r "$pattern"* "$TEMP_DIR/$pattern" 2>/dev/null || true
+            else
+              # 处理具体文件或通配符
+              echo "📄 备份文件: $pattern"
+              # 确保目标目录存在
+              target_dir="$TEMP_DIR/$(dirname "$pattern")"
+              mkdir -p "$target_dir"
+              cp -r $pattern "$target_dir/" 2>/dev/null || true
+            fi
+          done
+
           # 创建临时目录存储差异
+          echo "📂 创建临时目录存储差异..."
           REPO_ROOT=$(pwd)
           DIFF_DIR="${REPO_ROOT}/$TEMP_DIR/diff-patches"
           rm -rf "$DIFF_DIR"
           mkdir -p "$DIFF_DIR"
 
-          # 为每个排除文件创建差异补丁
-          echo "🔍 为排除文件生成差异补丁..."
+          # 获取main分支的最新代码
+          echo "🔄 获取main分支的最新代码..."
+          git fetch origin main
+          
+          # 重置当前分支到main分支的状态，但不提交
+          echo "🔄 重置当前分支到main分支的状态..."
+          git reset --mixed origin/main
+
+          # 恢复配置文件
+          echo "🔄 恢复配置文件..."
+          mkdir -p $(dirname "$EXCLUDE_FILES_CONFIG")
+          cp "$TEMP_DIR/exclude_config.bak" "$EXCLUDE_FILES_CONFIG"
+          git add "$EXCLUDE_FILES_CONFIG"
+
+          # 为备份的文件创建补丁
+          echo "🔍 为备份的文件创建补丁..."
           for pattern in "${EXCLUDE_PATTERNS[@]}"; do
-            # 处理目录模式（以/结尾）
             if [[ "$pattern" == */ ]]; then
-              echo "📄 处理目录: $pattern"
-              # 获取目录下所有文件
-              files=$(find "$pattern" -type f 2>/dev/null || echo "")
-              for file in $files; do
-                if [ -f "$file" ]; then
-                  # 为每个文件创建差异补丁
-                  patch_file="${DIFF_DIR}/${file//\//_}.patch"
-                  echo "  - 为文件创建补丁: $file"
-                  git diff main custom-dev -- "$file" > "$patch_file"
-                fi
-              done
-            # 处理具体文件或通配符
-            else
-              # 改进通配符模式的文件匹配
-              files=$(find . -path "./$pattern" -o -path "$pattern" 2>/dev/null || echo "")
-              if [ -z "$files" ]; then
-                # 尝试使用通配符展开
-                shopt -s nullglob
-                files=($pattern)
-                shopt -u nullglob
+              # 处理目录
+              backup_dir="$TEMP_DIR/$pattern"
+              if [ -d "$backup_dir" ]; then
+                echo "📄 处理备份目录: $pattern"
+                find "$backup_dir" -type f | while read backup_file; do
+                  # 获取相对路径
+                  rel_path=${backup_file#"$TEMP_DIR/"}
+                  # 创建目标目录
+                  target_dir=$(dirname "$rel_path")
+                  mkdir -p "$target_dir"
+                  
+                  # 检查文件是否存在于main分支
+                  if [ -f "$rel_path" ]; then
+                    # 创建补丁
+                    diff_file="${DIFF_DIR}/${rel_path//\//_}.patch"
+                    echo "  - 为文件创建补丁: $rel_path"
+                    diff -u "$rel_path" "$backup_file" > "$diff_file" 2>/dev/null || true
+                    
+                    # 检查补丁是否为空
+                    if [ ! -s "$diff_file" ]; then
+                      rm "$diff_file"  # 删除空补丁
+                    else
+                      echo "    补丁创建成功: $(wc -l < "$diff_file") 行"
+                    fi
+                  else
+                    # 文件在main分支不存在，直接复制
+                    echo "  - 复制新文件: $rel_path"
+                    cp "$backup_file" "$rel_path"
+                  fi
+                done
               fi
+            else
+              # 处理单个文件
+              backup_pattern="$TEMP_DIR/$pattern"
+              # 使用通配符展开
+              shopt -s nullglob
+              backup_files=($backup_pattern)
+              shopt -u nullglob
               
-              for file in $files; do
-                if [ -f "$file" ]; then
-                  patch_file="${DIFF_DIR}/${file//\//_}.patch"
-                  echo "📄 为文件创建补丁: $file"
-                  git diff main custom-dev -- "$file" > "$patch_file"
+              for backup_file in "${backup_files[@]}"; do
+                if [ -f "$backup_file" ]; then
+                  # 获取相对路径
+                  rel_path=${backup_file#"$TEMP_DIR/"}
+                  echo "📄 处理备份文件: $rel_path"
+                  
+                  # 创建目标目录
+                  target_dir=$(dirname "$rel_path")
+                  mkdir -p "$target_dir"
+                  
+                  # 检查文件是否存在于main分支
+                  if [ -f "$rel_path" ]; then
+                    # 创建补丁
+                    diff_file="${DIFF_DIR}/${rel_path//\//_}.patch"
+                    echo "  - 为文件创建补丁: $rel_path"
+                    diff -u "$rel_path" "$backup_file" > "$diff_file" 2>/dev/null || true
+                    
+                    # 检查补丁是否为空
+                    if [ ! -s "$diff_file" ]; then
+                      rm "$diff_file"  # 删除空补丁
+                    else
+                      echo "    补丁创建成功: $(wc -l < "$diff_file") 行"
+                    fi
+                  else
+                    # 文件在main分支不存在，直接复制
+                    echo "  - 复制新文件: $rel_path"
+                    cp "$backup_file" "$rel_path"
+                  fi
                 fi
               done
             fi
           done
 
-          # 创建临时分支（基于main）
-          echo "🔄 创建临时分支（基于main）..."
-          git checkout main
-          git checkout -b temp-sync-branch
-          
-          # 恢复配置文件
-          echo "🔄 恢复配置文件..."
-          mkdir -p $(dirname "$EXCLUDE_FILES_CONFIG")
-          cp "$TEMP_DIR/exclude_config.bak" "$EXCLUDE_FILES_CONFIG"
-
-          # 应用差异补丁
-          echo "🔄 应用custom-dev分支的修改..."
+          # 应用补丁
+          echo "🔄 应用补丁..."
           PATCH_COUNT=0
           REJECT_COUNT=0
           
           # 检查补丁目录是否存在补丁文件
           if [ -d "$DIFF_DIR" ] && [ "$(ls -A "$DIFF_DIR" 2>/dev/null)" ]; then
+            echo "🔍 找到补丁文件，开始应用..."
+            
             for patch_file in "$DIFF_DIR"/*.patch; do
               if [ -s "$patch_file" ]; then  # 只处理非空补丁文件
                 # 从补丁文件名恢复原始文件路径
@@ -163,9 +227,9 @@ jobs:
                 mkdir -p "$(dirname "$original_file")" 2>/dev/null || true
                 
                 # 应用补丁
-                if ! git apply --ignore-whitespace --reject "$patch_file" 2>/dev/null; then
+                if ! patch -p0 "$original_file" "$patch_file" 2>/dev/null; then
                   echo "⚠️ 补丁应用失败，尝试使用宽松模式..."
-                  if ! git apply --ignore-whitespace --reject --ignore-space-change --3way "$patch_file" 2>/dev/null; then
+                  if ! patch -p0 -l -f "$original_file" "$patch_file" 2>/dev/null; then
                     echo "❌ 无法应用补丁到: $original_file"
                     REJECT_COUNT=$((REJECT_COUNT + 1))
                   fi
@@ -200,7 +264,7 @@ jobs:
             git commit -m "同步main分支代码，保留custom-dev分支的自定义修改"
             
             echo "🚀 推送到custom-dev分支..."
-            git push --force origin temp-sync-branch:custom-dev
+            git push --force origin custom-dev
             
             echo "✅ 同步完成"
           fi
