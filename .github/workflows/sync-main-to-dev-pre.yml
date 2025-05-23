@@ -37,6 +37,11 @@ jobs:
         run: |
           echo "🚀 开始同步main分支到custom-dev分支..."
           
+          # 创建必要的目录
+          mkdir -p "$BACKUP_DIR"
+          mkdir -p "$TEMP_DIR"
+          echo "📁 创建工作目录完成"
+          
           # 检查 exclude 文件是否存在
           if [ ! -f "$EXCLUDE_FILE" ]; then
             echo "⚠️ $EXCLUDE_FILE 文件不存在，将使用main分支的所有更改"
