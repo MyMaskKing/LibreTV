@@ -166,19 +166,23 @@ jobs:
                     git show custom-dev:"$pattern" > "$temp_dev"
                     cp "$temp_main" "$temp_base"
                     
-                    # 使用merge-file处理冲突
-                    git merge-file "$temp_dev" "$temp_base" "$temp_main" || true
-                    
-                    # 备份带冲突标记的文件
+                    # 生成差异文件
                     backup_name="${pattern}.$(date +%Y%m%d_%H%M%S).merge.bak"
-                    cp "$temp_dev" "$backup_name"
-                    echo "✅ 已备份合并后的文件到: $backup_name"
+                    
+                    # 添加冲突标记并合并内容
+                    echo "<<<<<<< custom-dev" > "$backup_name"
+                    cat "$temp_dev" >> "$backup_name"
+                    echo "=======" >> "$backup_name"
+                    cat "$temp_main" >> "$backup_name"
+                    echo ">>>>>>> main" >> "$backup_name"
+                    
+                    echo "✅ 已备份带冲突标记的文件到: $backup_name"
                     
                     # 使用main版本
                     git checkout main -- "$pattern"
                     
                     CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
-                    CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 补丁应用失败，保留main版本，合并结果已备份到 ${backup_name}\n"
+                    CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 存在差异，已生成对比文件 ${backup_name}\n"
                   else
                     echo "📄 文件在main分支不存在，保留custom-dev版本"
                     git checkout custom-dev -- "$pattern"
