@@ -13,6 +13,7 @@ permissions:
 env:
   BACKUP_DIR: '.sync-backups'
   TEMP_DIR: '.sync-temp'
+  BACKUP_RETAIN_DAYS: 7
   EXCLUDE_FILE: 'sync-exclude.txt'
 
 jobs:
@@ -30,24 +31,11 @@ jobs:
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          # 确保临时目录不被git跟踪（避免重复添加）
-          if ! grep -q "^$TEMP_DIR$" .gitignore 2>/dev/null; then
-            echo "$TEMP_DIR" >> .gitignore
-          fi
-          if ! grep -q "^$BACKUP_DIR$" .gitignore 2>/dev/null; then
-            echo "$BACKUP_DIR" >> .gitignore
-          fi
           echo "✅ Git配置完成"
       
       - name: 同步main分支到custom-dev
         run: |
           echo "🚀 开始同步main分支到custom-dev分支..."
-          
-          # 检查exclude配置文件是否存在
-          if [ ! -f "$EXCLUDE_FILE" ]; then
-            echo "❌ 错误：$EXCLUDE_FILE 文件不存在"
-            exit 1
-          fi
           
           echo "📥 获取最新代码..."
           git fetch origin
@@ -68,42 +56,11 @@ jobs:
           echo "🧹 清理可能存在的合并状态..."
           git merge --abort || true
 
-          # 读取需要保留的文件列表（排除注释和空行）
-          EXCLUDE_PATTERNS=$(grep -v '^#' "$EXCLUDE_FILE" | grep -v '^$')
-
           echo "🔄 尝试合并main分支..."
           if git merge --squash main --no-commit; then
             echo "🔄 排除 workflow 文件..."
             git restore --staged .github/workflows/
             git restore .github/workflows/
-            
-            # 恢复需要保留的文件
-            while IFS= read -r pattern; do
-              if [ -z "$pattern" ]; then
-                continue
-              fi
-              
-              # 如果是目录（以/结尾）
-              if [[ "$pattern" == */ ]]; then
-                if [ -d "$pattern" ]; then
-                  pattern="${pattern}*"  # 添加通配符以匹配目录下所有文件
-                  echo "✅ 保留目录: $pattern"
-                else
-                  echo "⚠️ 警告：目录 $pattern 不存在，跳过"
-                  continue
-                fi
-              else
-                if [ ! -e "$pattern" ]; then
-                  echo "⚠️ 警告：文件 $pattern 不存在，跳过"
-                  continue
-                fi
-                echo "✅ 保留文件: $pattern"
-              fi
-              
-              # 恢复文件
-              git restore --staged "$pattern" 2>/dev/null || true
-              git restore "$pattern" 2>/dev/null || true
-            done <<< "$EXCLUDE_PATTERNS"
             
             echo "✅ 合并成功"
             git add -A
@@ -129,56 +86,29 @@ jobs:
           # 获取所有冲突文件
           CONFLICT_FILES=$(git diff --name-only --diff-filter=U)
           
-          # 过滤冲突文件（排除 workflow 文件和配置的排除文件）
+          # 过滤冲突文件（基于 sync-exclude.txt）
           FILTERED_CONFLICT_FILES=""
-          EXCLUDED_FILES=""
           while IFS= read -r file; do
-            # 检查文件是否在排除列表中
-            SHOULD_EXCLUDE=0
-            while IFS= read -r pattern; do
-              if [ -z "$pattern" ]; then
-                continue
-              fi
-              
-              # 如果是目录模式
-              if [[ "$pattern" == */ ]]; then
-                if [[ "$file" == $pattern* ]]; then
-                  SHOULD_EXCLUDE=1
-                  EXCLUDED_FILES="${EXCLUDED_FILES}${file}\n"
-                  break
-                fi
-              # 如果是文件模式
-              else
-                if [[ "$file" == "$pattern" ]]; then
-                  SHOULD_EXCLUDE=1
-                  EXCLUDED_FILES="${EXCLUDED_FILES}${file}\n"
-                  break
-                fi
-              fi
-            done <<< "$EXCLUDE_PATTERNS"
-            
-            if [ "$SHOULD_EXCLUDE" -eq 0 ] && [[ ! "$file" =~ ^\.github/workflows/ ]]; then
+            # 使用 grep 检查文件是否在 exclude 列表中
+            if grep -v '^#' "$EXCLUDE_FILE" | grep -v '^[[:space:]]*$' | grep -q "^${file%/}$\|^${file%/}/"; then
               FILTERED_CONFLICT_FILES="${FILTERED_CONFLICT_FILES}${file}\n"
             fi
           done <<< "$CONFLICT_FILES"
           
-          echo "📝 发现以下需要使用main分支版本的文件："
+          echo "📝 发现以下需要智能处理的冲突文件："
           echo -e "$FILTERED_CONFLICT_FILES"
-          
-          echo "📝 发现以下需要保留custom-dev版本的文件："
-          echo -e "$EXCLUDED_FILES"
           
           # 创建临时文件存储备份文件列表
           BACKUP_FILES_LIST="/tmp/backup_files_list.txt"
           > "$BACKUP_FILES_LIST"  # 清空文件
           
-          # 处理需要保留的文件（在排除列表中的文件）
-          echo -e "$EXCLUDED_FILES" | while IFS= read -r file; do
+          # 处理冲突文件
+          echo -e "$FILTERED_CONFLICT_FILES" | while IFS= read -r file; do
             if [ -z "$file" ]; then
               continue
             fi
             
-            echo "🔄 处理需要保留的文件: $file"
+            echo "🔄 处理文件: $file"
             
             # 检查文件是否存在
             if [ ! -f "$file" ]; then
@@ -188,7 +118,9 @@ jobs:
             
             # 检查 custom-dev 是否修改了这个文件
             if git diff --quiet $base HEAD -- "$file"; then
-              echo "✨ $file 在custom-dev中未修改，跳过"
+              echo "✨ $file 在custom-dev中未修改，自动使用main的版本"
+              git checkout --theirs "$file"
+              git add "$file"
               continue
             fi
             
@@ -210,17 +142,7 @@ jobs:
               # 清理路径中的多余的 ./ 
               backup_relative_path=$(echo "$backup_relative_path" | sed 's|^\./||' | sed 's|/\./|/|g')
               echo "$backup_relative_path" >> "$BACKUP_FILES_LIST"
-            fi
-          done
-          
-          # 处理其他冲突文件（直接使用main分支版本）
-          echo -e "$FILTERED_CONFLICT_FILES" | while IFS= read -r file; do
-            if [ -z "$file" ]; then
-              continue
-            fi
-            
-            echo "🔄 处理需要使用main版本的文件: $file"
-            if [ -f "$file" ]; then
+              
               echo "📥 使用main分支版本..."
               git checkout main -- "$file"
               git add "$file"
@@ -306,7 +228,6 @@ jobs:
             1. 所有冲突文件已使用main分支的版本
             2. custom-dev分支的原始代码已在同目录下备份
             3. 如需恢复或合并自定义代码，请参考备份文件
-            4. sync-exclude.txt 中配置的文件已自动保留
             
             ## 手动处理步骤
             1. 检查备份文件内容
@@ -332,4 +253,4 @@ jobs:
       
       - name: Notify result
         run: |
-          echo "✅ 同步流程已完成。请检查 custom-dev 分支，如有 .backup 文件请手动 diff 并处理。"
+          echo "✅ 同步流程已完成。请检查 custom-dev 分支，如有 .backup 文件请手动 diff 并处理。" 
