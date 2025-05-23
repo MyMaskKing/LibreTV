@@ -128,19 +128,26 @@ jobs:
           
           # 将main分支的文件复制到临时目录
           echo "📥 将main分支的文件复制到临时目录..."
-          git show origin/main:. | tar -x -C "$MAIN_TEMP_DIR" 2>/dev/null || true
+          # 使用更可靠的方式获取main分支文件
+          git checkout origin/main -- .
+          cp -r ./* "$MAIN_TEMP_DIR/" 2>/dev/null || true
+          git checkout custom-dev
           
           # 保存当前custom-dev分支的状态
           echo "💾 保存当前custom-dev分支的状态..."
           CUSTOM_DEV_COMMIT=$(git rev-parse HEAD)
           
-          # 清空工作目录（保留.git目录）
+          # 清空工作目录（保留.git目录和临时目录）
           echo "🧹 清空工作目录..."
           find . -mindepth 1 -maxdepth 1 -not -path "./.git" -not -path "./$TEMP_DIR" -exec rm -rf {} \;
           
           # 从临时目录复制main分支的文件
           echo "📤 从临时目录复制main分支的文件..."
           cp -r "$MAIN_TEMP_DIR"/* ./ 2>/dev/null || true
+          
+          # 列出复制的文件
+          echo "📋 复制的文件列表:"
+          find . -type f -not -path "./.git/*" -not -path "./$TEMP_DIR/*" | sort
 
           # 恢复配置文件
           echo "🔄 恢复配置文件..."
