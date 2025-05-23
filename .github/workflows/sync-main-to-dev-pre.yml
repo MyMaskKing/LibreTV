@@ -154,14 +154,19 @@ jobs:
                     
                     # 检查补丁是否为空
                     if [ ! -s "$diff_file" ]; then
+                      echo "    - 文件没有差异，跳过"
                       rm "$diff_file"  # 删除空补丁
                     else
-                      echo "    补丁创建成功: $(wc -l < "$diff_file") 行"
+                      echo "    - 补丁创建成功: $(wc -l < "$diff_file") 行"
+                      # 直接复制文件以确保修改被应用
+                      cp "$backup_file" "$rel_path"
+                      git add "$rel_path"
                     fi
                   else
                     # 文件在main分支不存在，直接复制
                     echo "  - 复制新文件: $rel_path"
                     cp "$backup_file" "$rel_path"
+                    git add "$rel_path"
                   fi
                 done
               fi
@@ -192,21 +197,35 @@ jobs:
                     
                     # 检查补丁是否为空
                     if [ ! -s "$diff_file" ]; then
+                      echo "    - 文件没有差异，跳过"
                       rm "$diff_file"  # 删除空补丁
                     else
-                      echo "    补丁创建成功: $(wc -l < "$diff_file") 行"
+                      echo "    - 补丁创建成功: $(wc -l < "$diff_file") 行"
+                      # 直接复制文件以确保修改被应用
+                      cp "$backup_file" "$rel_path"
+                      git add "$rel_path"
                     fi
                   else
                     # 文件在main分支不存在，直接复制
                     echo "  - 复制新文件: $rel_path"
                     cp "$backup_file" "$rel_path"
+                    git add "$rel_path"
                   fi
                 fi
               done
             fi
           done
 
-          # 应用补丁
+          # 列出创建的补丁文件
+          echo "📋 创建的补丁文件列表:"
+          if [ -d "$DIFF_DIR" ]; then
+            find "$DIFF_DIR" -type f -name "*.patch" | sort
+            echo "补丁文件总数: $(find "$DIFF_DIR" -type f -name "*.patch" | wc -l)"
+          else
+            echo "补丁目录不存在"
+          fi
+
+          # 应用补丁（作为参考，但实际已经直接复制了文件）
           echo "🔄 应用补丁..."
           PATCH_COUNT=0
           REJECT_COUNT=0
@@ -226,13 +245,10 @@ jobs:
                 # 创建目录（如果需要）
                 mkdir -p "$(dirname "$original_file")" 2>/dev/null || true
                 
-                # 应用补丁
+                # 应用补丁（注意：文件已经在前面直接复制了，这里只是记录）
                 if ! patch -p0 "$original_file" "$patch_file" 2>/dev/null; then
-                  echo "⚠️ 补丁应用失败，尝试使用宽松模式..."
-                  if ! patch -p0 -l -f "$original_file" "$patch_file" 2>/dev/null; then
-                    echo "❌ 无法应用补丁到: $original_file"
-                    REJECT_COUNT=$((REJECT_COUNT + 1))
-                  fi
+                  echo "⚠️ 补丁应用失败，但文件已经直接从备份复制，无需担心"
+                  REJECT_COUNT=$((REJECT_COUNT + 1))
                 fi
               fi
             done
@@ -243,12 +259,13 @@ jobs:
           # 检查是否有拒绝的补丁
           REJECT_FILES=$(find . -name "*.rej")
           if [ -n "$REJECT_FILES" ]; then
-            echo "⚠️ 警告：以下文件的补丁应用失败："
+            echo "⚠️ 警告：以下文件的补丁应用失败，但文件已经直接从备份复制："
             echo "$REJECT_FILES"
-            echo "请手动检查这些文件"
+            # 删除拒绝文件，因为我们已经直接复制了文件
+            find . -name "*.rej" -delete
           fi
           
-          echo "📊 补丁统计: 应用 $PATCH_COUNT 个补丁，$REJECT_COUNT 个失败"
+          echo "📊 补丁统计: 应用 $PATCH_COUNT 个补丁，$REJECT_COUNT 个失败（但文件已经直接复制）"
 
           # 清理差异目录
           rm -rf "$DIFF_DIR"
