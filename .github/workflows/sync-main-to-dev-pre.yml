@@ -131,8 +131,20 @@ jobs:
             if [[ "$pattern" == */ ]]; then
               if [ -d "$TEMP_DIR/$pattern" ]; then
                 echo "  📂 恢复目录: $pattern"
-                rm -rf "$pattern"
-                cp -r "$TEMP_DIR/$pattern" "$(dirname "$pattern")/"
+                # 创建目录（如果不存在）
+                mkdir -p "$pattern"
+                
+                # 使用rsync保留目录结构，排除.git文件
+                if command -v rsync >/dev/null 2>&1; then
+                  rsync -av --exclude='.git*' "$TEMP_DIR/$pattern" "$(dirname "$pattern")/"
+                else
+                  # 如果没有rsync，使用cp
+                  cp -r "$TEMP_DIR/$pattern"* "$pattern" 2>/dev/null || true
+                fi
+                
+                echo "    ✓ 目录恢复完成"
+                # 添加目录更改到git
+                git add "$pattern"
               fi
               continue
             fi
@@ -141,38 +153,46 @@ jobs:
             if [ -f "$TEMP_DIR/$pattern" ]; then
               echo "  📄 处理文件: $pattern"
               
-              # 检查文件在main分支是否有更改
-              if git diff --quiet origin/main origin/custom-dev -- "$pattern" 2>/dev/null; then
+              # 获取三个版本的文件用于比较
+              TEMP_COMPARE_DIR="$TEMP_DIR/compare"
+              mkdir -p "$TEMP_COMPARE_DIR"
+              BASE_FILE="$TEMP_COMPARE_DIR/base"
+              OURS_FILE="$TEMP_COMPARE_DIR/ours"
+              THEIRS_FILE="$TEMP_COMPARE_DIR/theirs"
+              
+              # 获取共同祖先版本（base）
+              git merge-base origin/main origin/custom-dev > /dev/null 2>&1
+              MERGE_BASE=$(git merge-base origin/main origin/custom-dev)
+              git show "$MERGE_BASE:$pattern" > "$BASE_FILE" 2>/dev/null || touch "$BASE_FILE"
+              
+              # 获取当前分支版本（ours）
+              cp "$TEMP_DIR/$pattern" "$OURS_FILE"
+              
+              # 获取main分支版本（theirs）
+              git show "origin/main:$pattern" > "$THEIRS_FILE" 2>/dev/null || touch "$THEIRS_FILE"
+              
+              # 比较文件差异
+              if diff "$OURS_FILE" "$THEIRS_FILE" >/dev/null 2>&1; then
                 echo "    ✓ 文件无差异，使用原文件"
                 cp -f "$TEMP_DIR/$pattern" "$pattern"
+                git add "$pattern"
               else
-                echo "    ⚠️ 检测到差异，尝试合并..."
-                
-                # 创建临时文件用于合并
-                TEMP_MERGE_DIR="$TEMP_DIR/merge"
-                mkdir -p "$TEMP_MERGE_DIR"
-                BASE_FILE="$TEMP_MERGE_DIR/base"
-                OURS_FILE="$TEMP_MERGE_DIR/ours"
-                THEIRS_FILE="$TEMP_MERGE_DIR/theirs"
-                
-                # 获取文件的各个版本
-                git show "origin/main:$pattern" > "$BASE_FILE" 2>/dev/null || touch "$BASE_FILE"
-                cp "$TEMP_DIR/$pattern" "$OURS_FILE"
-                git show "origin/main:$pattern" > "$THEIRS_FILE" 2>/dev/null || touch "$THEIRS_FILE"
-                
+                echo "    ⚠️ 检测到差异，尝试三方合并..."
                 # 尝试三方合并
                 if git merge-file -p "$OURS_FILE" "$BASE_FILE" "$THEIRS_FILE" > "$pattern" 2>/dev/null; then
                   echo "    ✅ 自动合并成功"
+                  git add "$pattern"
                 else
                   echo "    ❌ 合并冲突"
                   echo "$pattern" >> "$TEMP_DIR/conflict_files.txt"
                   # 暂时使用main版本
                   git checkout origin/main -- "$pattern"
+                  git add "$pattern"
                 fi
-                
-                # 清理临时合并文件
-                rm -rf "$TEMP_MERGE_DIR"
               fi
+              
+              # 清理临时比较文件
+              rm -rf "$TEMP_COMPARE_DIR"
             fi
           done <<< "$EXCLUDE_PATTERNS"
           
@@ -186,12 +206,20 @@ jobs:
             echo "MERGE_CONFLICT=false" >> $GITHUB_ENV
           fi
           
-          # 4. 提交更改
-          git add -A
+          # 4. 清理临时目录，避免被提交
+          echo "🧹 清理临时目录..."
+          rm -rf "$TEMP_DIR"
+          
+          # 5. 检查并提交更改
           if git diff --cached --quiet; then
             echo "✅ 没有需要提交的更改"
           else
+            echo "📝 提交更改..."
+            echo "变更文件列表："
+            git diff --cached --name-status
+            
             git commit -m "同步main分支代码，保留custom-dev分支的自定义修改"
+            echo "🚀 推送更改..."
             git push -f origin custom-dev
           fi
 
