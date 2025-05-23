@@ -144,18 +144,27 @@ jobs:
                   CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
                   CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 补丁应用成功\n"
                 else
-                  echo "⚠️ 补丁应用失败，保留main版本并备份custom-dev版本: $pattern"
-                  # 创建备份文件
-                  backup_name="${pattern}.$(date +%Y%m%d_%H%M%S).custom-dev.bak"
-                  
-                  # 备份custom-dev版本到同级目录
-                  git show custom-dev:"$pattern" > "$backup_name"
-                  
-                  # 保持main分支版本
-                  git checkout main -- "$pattern"
-                  
-                  CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
-                  CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 补丁应用失败，保留main版本，custom-dev版本已备份到 ${backup_name}\n"
+                  echo "⚠️ 补丁应用失败: $pattern"
+                  # 检查文件在main分支是否存在
+                  if git ls-tree main --name-only | grep -q "^${pattern}$"; then
+                    echo "📄 文件在main分支存在，保留main版本并备份custom-dev版本"
+                    # 确保目录存在
+                    mkdir -p "$(dirname "$pattern")"
+                    # 备份custom-dev版本
+                    backup_name="${pattern}.$(date +%Y%m%d_%H%M%S).custom-dev.bak"
+                    git show custom-dev:"$pattern" > "$backup_name"
+                    # 使用main版本
+                    git checkout main -- "$pattern"
+                    
+                    CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
+                    CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 补丁应用失败，保留main版本，custom-dev版本已备份到 ${backup_name}\n"
+                  else
+                    echo "📄 文件在main分支不存在，保留custom-dev版本"
+                    git checkout custom-dev -- "$pattern"
+                    
+                    CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
+                    CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 在main分支不存在，保留custom-dev版本\n"
+                  fi
                 fi
               fi
             fi
