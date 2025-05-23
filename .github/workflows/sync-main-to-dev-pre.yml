@@ -34,280 +34,203 @@ jobs:
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           echo "✅ Git配置完成"
       
-      - name: 智能同步main分支到custom-dev
+      - name: 读取排除文件列表并备份
+        id: backup
         run: |
-          echo "🚀 开始智能同步main分支到custom-dev分支..."
-          
-          echo "📥 获取最新代码..."
-          git fetch origin
-          git fetch origin main:main
-          
-          echo "🔍 检查custom-dev分支状态..."
-          if ! git show-ref --verify --quiet refs/remotes/origin/custom-dev; then
-            echo "⚠️ custom-dev分支不存在，正在创建..."
-            git checkout -b custom-dev
-            echo "✅ custom-dev分支创建成功"
-          else
-            echo "✅ 切换到已存在的custom-dev分支"
-            git checkout custom-dev
-            echo "🔄 重置分支到最新状态"
-            git reset --hard origin/custom-dev
-          fi
-
-          # 检查排除文件配置是否存在
           if [ ! -f "$EXCLUDE_FILES_CONFIG" ]; then
             echo "❌ 错误：排除文件配置 $EXCLUDE_FILES_CONFIG 不存在"
-            echo "请先在 custom-dev 分支创建配置文件，定义需要保留的自定义修改"
-            echo "配置文件格式示例："
-            echo "# 这个文件定义了哪些文件应该保留custom-dev分支的修改"
-            echo "# 每行一个文件或目录路径，支持通配符"
-            echo "# 以#开头的行为注释"
-            echo ""
-            echo ".github/workflows/"
-            echo "js/sync/sync.js"
-            echo "player.html"
-            echo "$EXCLUDE_FILES_CONFIG"
             exit 1
           fi
-
-          # 保存配置文件
-          echo "💾 保存配置文件..."
           mkdir -p "$TEMP_DIR"
           cp "$EXCLUDE_FILES_CONFIG" "$TEMP_DIR/exclude_config.bak"
-
-          # 读取排除文件列表
-          echo "📋 读取排除文件列表..."
           EXCLUDE_PATTERNS=()
           while IFS= read -r line || [[ -n "$line" ]]; do
-            # 跳过空行和注释
             if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
               continue
             fi
-            # 去除前后空格
             line=$(echo "$line" | xargs)
             if [[ -n "$line" ]]; then
               EXCLUDE_PATTERNS+=("$line")
               echo "  - 排除: $line"
             fi
           done < "$EXCLUDE_FILES_CONFIG"
-
-          # 备份需要保留的文件
-          echo "💾 备份需要保留的文件..."
           for pattern in "${EXCLUDE_PATTERNS[@]}"; do
-            # 处理目录模式（以/结尾）
             if [[ "$pattern" == */ ]]; then
-              echo "📄 备份目录: $pattern"
               mkdir -p "$TEMP_DIR/$pattern"
               cp -r "$pattern"* "$TEMP_DIR/$pattern" 2>/dev/null || true
             else
-              # 处理具体文件或通配符
-              echo "📄 备份文件: $pattern"
-              # 确保目标目录存在
               target_dir="$TEMP_DIR/$(dirname "$pattern")"
               mkdir -p "$target_dir"
               cp -r $pattern "$target_dir/" 2>/dev/null || true
             fi
           done
 
-          # 创建临时目录存储差异
-          echo "📂 创建临时目录存储差异..."
+      - name: 合并main分支到custom-dev
+        id: merge
+        run: |
+          git fetch origin
+          git fetch origin main:main
+          if ! git show-ref --verify --quiet refs/remotes/origin/custom-dev; then
+            git checkout -b custom-dev
+          else
+            git checkout custom-dev
+            git reset --hard origin/custom-dev
+          fi
+          git merge --abort || true
+          if git merge origin/main --no-commit; then
+            echo "MERGE_CONFLICT=false" >> $GITHUB_ENV
+          else
+            echo "MERGE_CONFLICT=true" >> $GITHUB_ENV
+          fi
+
+      - name: 检查并处理合并冲突
+        if: env.MERGE_CONFLICT == 'true'
+        id: handle_conflict
+        run: |
+          CONFLICT_FILES=$(git status --porcelain | grep "^UU" | cut -c4-)
+          if [ -z "$CONFLICT_FILES" ]; then
+            echo "❌ 没有检测到冲突文件，可能是其他错误"
+            git status
+            exit 1
+          fi
+          FILTERED_CONFLICT_FILES=""
+          while IFS= read -r file; do
+            if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
+              FILTERED_CONFLICT_FILES="${FILTERED_CONFLICT_FILES}${file}\n"
+            fi
+          done <<< "$CONFLICT_FILES"
+          FILTERED_CONFLICT_FILES=$(echo -e "$FILTERED_CONFLICT_FILES" | sed '$ s/\\n$//')
+          echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
+          echo -e "$FILTERED_CONFLICT_FILES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          BACKUP_FILES=""
           REPO_ROOT=$(pwd)
-          DIFF_DIR="${REPO_ROOT}/$TEMP_DIR/diff-patches"
-          rm -rf "$DIFF_DIR"
-          mkdir -p "$DIFF_DIR"
-
-          # 获取main分支的最新代码
-          echo "🔄 获取main分支的最新代码..."
-          git fetch origin main
-          
-          # 创建临时目录存储main分支的文件
-          echo "📂 创建临时目录存储main分支的文件..."
-          MAIN_TEMP_DIR="${REPO_ROOT}/$TEMP_DIR/main_files"
-          rm -rf "$MAIN_TEMP_DIR"
-          mkdir -p "$MAIN_TEMP_DIR"
-          
-          # 将main分支的文件复制到临时目录
-          echo "📥 将main分支的文件复制到临时目录..."
-          # 使用更可靠的方式获取main分支文件
+          BACKUP_ROOT="../backup_files"
+          rm -rf "$BACKUP_ROOT"
+          mkdir -p "$BACKUP_ROOT"
+          while IFS= read -r file; do
+            if [ -z "$file" ]; then
+              continue
+            fi
+            if [ ! -f "$file" ]; then
+              continue
+            fi
+            file_dir=$(dirname "$file")
+            backup_dir="$BACKUP_ROOT/$file_dir"
+            mkdir -p "$backup_dir"
+            backup_name="$(basename "$file").$(date +%Y%m%d_%H%M%S).backup"
+            backup_file="$backup_dir/$backup_name"
+            cp "$file" "$backup_file" || true
+            if [ -f "$backup_file" ]; then
+              BACKUP_FILES="${BACKUP_FILES}\n$backup_file"
+              git checkout origin/main -- "$file"
+              git add "$file"
+            fi
+          done <<< "$FILTERED_CONFLICT_FILES"
+          git reset --hard HEAD
+          git clean -f -d
           git checkout origin/main -- .
-          cp -r ./* "$MAIN_TEMP_DIR/" 2>/dev/null || true
-          git checkout custom-dev
-          
-          # 保存当前custom-dev分支的状态
-          echo "💾 保存当前custom-dev分支的状态..."
-          CUSTOM_DEV_COMMIT=$(git rev-parse HEAD)
-          
-          # 清空工作目录（保留.git目录和临时目录）
-          echo "🧹 清空工作目录..."
-          find . -mindepth 1 -maxdepth 1 -not -path "./.git" -not -path "./$TEMP_DIR" -exec rm -rf {} \;
-          
-          # 从临时目录复制main分支的文件
-          echo "📤 从临时目录复制main分支的文件..."
-          cp -r "$MAIN_TEMP_DIR"/* ./ 2>/dev/null || true
-          
-          # 列出复制的文件
-          echo "📋 复制的文件列表:"
-          find . -type f -not -path "./.git/*" -not -path "./$TEMP_DIR/*" | sort
+          rm -rf .github/workflows/*
+          git checkout custom-dev -- .github/workflows/
+          if [ -d "$BACKUP_ROOT" ]; then
+            cp -r "$BACKUP_ROOT"/* .
+            rm -rf "$BACKUP_ROOT"
+          fi
+          git add -A
+          git commit -m "同步main分支代码，并保存冲突文件备份" || echo "没有需要提交的更改"
+          git push --force origin custom-dev
+          echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
+          echo -e "$BACKUP_FILES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
-          # 恢复配置文件
-          echo "🔄 恢复配置文件..."
-          mkdir -p $(dirname "$EXCLUDE_FILES_CONFIG")
+      - name: 创建Issue报告
+        if: env.MERGE_CONFLICT == 'true'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const issueBody = `
+            # main -> custom-dev 同步冲突报告
+            
+            在同步过程中发现以下文件存在冲突，已自动使用main分支的代码并备份原文件。
+            
+            ## 冲突文件列表
+            \n\n\`\`\`
+            ${process.env.CONFLICT_FILES}
+            \`\`\`
+            
+            ## 备份文件
+            已在每个冲突文件的同目录下创建备份文件：
+            \n\n\`\`\`
+            ${process.env.BACKUP_FILES}
+            \`\`\`
+            
+            ## 处理说明
+            1. 所有冲突文件已使用main分支的版本
+            2. custom-dev分支的原始代码已在同目录下备份
+            3. 如需恢复或合并自定义代码，请参考备份文件
+            
+            ## 手动处理步骤
+            1. 检查备份文件内容
+            2. 如需修改，请在custom-dev分支上进行更改
+            3. 确保更改后的代码与main分支的改动不冲突
+            `;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🔄 main -> custom-dev 同步冲突报告',
+              body: issueBody,
+              labels: ['sync-conflict']
+            });
+
+      - name: 恢复自定义文件并提交
+        if: env.MERGE_CONFLICT == 'false'
+        run: |
           cp "$TEMP_DIR/exclude_config.bak" "$EXCLUDE_FILES_CONFIG"
-          git add "$EXCLUDE_FILES_CONFIG"
-
-          # 为备份的文件创建补丁
-          echo "🔍 为备份的文件创建补丁..."
+          EXCLUDE_PATTERNS=()
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+              continue
+            fi
+            line=$(echo "$line" | xargs)
+            if [[ -n "$line" ]]; then
+              EXCLUDE_PATTERNS+=("$line")
+            fi
+          done < "$EXCLUDE_FILES_CONFIG"
+          RESTORED_COUNT=0
           for pattern in "${EXCLUDE_PATTERNS[@]}"; do
             if [[ "$pattern" == */ ]]; then
-              # 处理目录
               backup_dir="$TEMP_DIR/$pattern"
               if [ -d "$backup_dir" ]; then
-                echo "📄 处理备份目录: $pattern"
                 find "$backup_dir" -type f | while read backup_file; do
-                  # 获取相对路径
                   rel_path=${backup_file#"$TEMP_DIR/"}
-                  # 创建目标目录
                   target_dir=$(dirname "$rel_path")
                   mkdir -p "$target_dir"
-                  
-                  # 检查文件是否存在于main分支
-                  if [ -f "$rel_path" ]; then
-                    # 创建补丁
-                    diff_file="${DIFF_DIR}/${rel_path//\//_}.patch"
-                    echo "  - 为文件创建补丁: $rel_path"
-                    diff -u "$rel_path" "$backup_file" > "$diff_file" 2>/dev/null || true
-                    
-                    # 检查补丁是否为空
-                    if [ ! -s "$diff_file" ]; then
-                      echo "    - 文件没有差异，跳过"
-                      rm "$diff_file"  # 删除空补丁
-                    else
-                      echo "    - 补丁创建成功: $(wc -l < "$diff_file") 行"
-                      # 直接复制文件以确保修改被应用
-                      cp "$backup_file" "$rel_path"
-                      git add "$rel_path"
-                    fi
-                  else
-                    # 文件在main分支不存在，直接复制
-                    echo "  - 复制新文件: $rel_path"
-                    cp "$backup_file" "$rel_path"
-                    git add "$rel_path"
-                  fi
+                  cp "$backup_file" "$rel_path"
+                  RESTORED_COUNT=$((RESTORED_COUNT + 1))
                 done
               fi
             else
-              # 处理单个文件
               backup_pattern="$TEMP_DIR/$pattern"
-              # 使用通配符展开
               shopt -s nullglob
               backup_files=($backup_pattern)
               shopt -u nullglob
-              
               for backup_file in "${backup_files[@]}"; do
                 if [ -f "$backup_file" ]; then
-                  # 获取相对路径
                   rel_path=${backup_file#"$TEMP_DIR/"}
-                  echo "📄 处理备份文件: $rel_path"
-                  
-                  # 创建目标目录
                   target_dir=$(dirname "$rel_path")
                   mkdir -p "$target_dir"
-                  
-                  # 检查文件是否存在于main分支
-                  if [ -f "$rel_path" ]; then
-                    # 创建补丁
-                    diff_file="${DIFF_DIR}/${rel_path//\//_}.patch"
-                    echo "  - 为文件创建补丁: $rel_path"
-                    diff -u "$rel_path" "$backup_file" > "$diff_file" 2>/dev/null || true
-                    
-                    # 检查补丁是否为空
-                    if [ ! -s "$diff_file" ]; then
-                      echo "    - 文件没有差异，跳过"
-                      rm "$diff_file"  # 删除空补丁
-                    else
-                      echo "    - 补丁创建成功: $(wc -l < "$diff_file") 行"
-                      # 直接复制文件以确保修改被应用
-                      cp "$backup_file" "$rel_path"
-                      git add "$rel_path"
-                    fi
-                  else
-                    # 文件在main分支不存在，直接复制
-                    echo "  - 复制新文件: $rel_path"
-                    cp "$backup_file" "$rel_path"
-                    git add "$rel_path"
-                  fi
+                  cp "$backup_file" "$rel_path"
+                  RESTORED_COUNT=$((RESTORED_COUNT + 1))
                 fi
               done
             fi
           done
-
-          # 列出创建的补丁文件
-          echo "📋 创建的补丁文件列表:"
-          if [ -d "$DIFF_DIR" ]; then
-            find "$DIFF_DIR" -type f -name "*.patch" | sort
-            echo "补丁文件总数: $(find "$DIFF_DIR" -type f -name "*.patch" | wc -l)"
-          else
-            echo "补丁目录不存在"
-          fi
-
-          # 应用补丁（作为参考，但实际已经直接复制了文件）
-          echo "🔄 应用补丁..."
-          PATCH_COUNT=0
-          REJECT_COUNT=0
-          
-          # 检查补丁目录是否存在补丁文件
-          if [ -d "$DIFF_DIR" ] && [ "$(ls -A "$DIFF_DIR" 2>/dev/null)" ]; then
-            echo "🔍 找到补丁文件，开始应用..."
-            
-            for patch_file in "$DIFF_DIR"/*.patch; do
-              if [ -s "$patch_file" ]; then  # 只处理非空补丁文件
-                # 从补丁文件名恢复原始文件路径
-                original_file=$(basename "$patch_file" .patch | tr '_' '/')
-                
-                echo "📄 应用补丁到文件: $original_file"
-                PATCH_COUNT=$((PATCH_COUNT + 1))
-                
-                # 创建目录（如果需要）
-                mkdir -p "$(dirname "$original_file")" 2>/dev/null || true
-                
-                # 应用补丁（注意：文件已经在前面直接复制了，这里只是记录）
-                if ! patch -p0 "$original_file" "$patch_file" 2>/dev/null; then
-                  echo "⚠️ 补丁应用失败，但文件已经直接从备份复制，无需担心"
-                  REJECT_COUNT=$((REJECT_COUNT + 1))
-                fi
-              fi
-            done
-          else
-            echo "ℹ️ 没有找到需要应用的补丁文件"
-          fi
-          
-          # 检查是否有拒绝的补丁
-          REJECT_FILES=$(find . -name "*.rej")
-          if [ -n "$REJECT_FILES" ]; then
-            echo "⚠️ 警告：以下文件的补丁应用失败，但文件已经直接从备份复制："
-            echo "$REJECT_FILES"
-            # 删除拒绝文件，因为我们已经直接复制了文件
-            find . -name "*.rej" -delete
-          fi
-          
-          echo "📊 补丁统计: 应用 $PATCH_COUNT 个补丁，$REJECT_COUNT 个失败（但文件已经直接复制）"
-
-          # 清理差异目录
-          rm -rf "$DIFF_DIR"
-          
-          # 提交更改
-          echo "📝 提交更改..."
           git add -A
-          
-          # 检查是否有更改需要提交
           if git diff --cached --quiet; then
             echo "✅ 没有需要提交的更改，同步完成"
           else
             git commit -m "同步main分支代码，保留custom-dev分支的自定义修改"
-            
-            echo "🚀 推送到custom-dev分支..."
-            git push --force origin custom-dev
-            
+            git push origin custom-dev
             echo "✅ 同步完成"
           fi
 
