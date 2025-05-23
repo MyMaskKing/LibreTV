@@ -168,8 +168,8 @@ jobs:
                     
                     # 使用merge-file生成冲突文件
                     backup_name="${pattern}.$(date +%Y%m%d_%H%M%S).merge.bak"
-                    git merge-file -L custom-dev -L base -L main "$temp_dev" "$temp_base" "$temp_main" || true
-                    cp "$temp_dev" "$backup_name"
+                    # 强制生成冲突标记
+                    git merge-file -L "custom-dev" -L "base" -L "main" --stdout "$temp_dev" "$temp_base" "$temp_main" > "$backup_name" || true
                     
                     echo "✅ 已备份带冲突标记的文件到: $backup_name"
                     
