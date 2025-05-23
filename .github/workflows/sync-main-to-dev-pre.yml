@@ -1,4 +1,4 @@
-name: 同步main到dev测试分支(基于exclude配置)
+name: 🔄同步main到dev测试分支(基于exclude配置)
 
 on:
   # 只允许手动触发
