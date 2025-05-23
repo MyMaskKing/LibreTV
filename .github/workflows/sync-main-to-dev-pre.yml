@@ -146,7 +146,7 @@ jobs:
                 else
                   echo "⚠️ 补丁应用失败: $pattern"
                   # 检查文件在main分支是否存在
-                  if git ls-tree main --name-only | grep -q "^${pattern}$"; then
+                  if git cat-file -e main:"$pattern" 2>/dev/null; then
                     echo "📄 文件在main分支存在，保留main版本并备份custom-dev版本"
                     # 确保目录存在
                     mkdir -p "$(dirname "$pattern")"
