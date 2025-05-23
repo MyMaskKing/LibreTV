@@ -193,9 +193,14 @@ jobs:
           
           # 清理临时文件
           rm -rf "$TEMP_PATCH_DIR"
+          rm -rf "$TEMP_DIR"
+          echo "🧹 清理临时文件完成"
           
           # 提交更改
+          # 排除临时文件和目录
           git add -A
+          git reset HEAD "$TEMP_DIR" "$BACKUP_DIR"
+          git clean -fd "$TEMP_DIR"
           git commit -m "同步main分支代码，保留指定文件的custom-dev版本" || echo "没有需要提交的更改"
           git push --force origin custom-dev
           
