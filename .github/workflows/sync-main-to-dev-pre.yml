@@ -166,12 +166,27 @@ jobs:
                     git show custom-dev:"$pattern" > "$temp_dev"
                     cp "$temp_main" "$temp_base"
                     
-                    # 使用merge-file生成冲突文件
+                    # 创建临时分支进行文件合并
                     backup_name="${pattern}.$(date +%Y%m%d_%H%M%S).merge.bak"
-                    # 强制生成冲突标记
-                    git merge-file -L "custom-dev" -L "base" -L "main" --stdout "$temp_dev" "$temp_base" "$temp_main" > "$backup_name" || true
+                    temp_branch="temp_merge_$(date +%s)"
+                    git checkout -b "$temp_branch" main
+                    cp "$temp_dev" "$pattern"
+                    git add "$pattern"
+                    git commit -m "temp commit for merge" > /dev/null 2>&1
                     
-                    echo "✅ 已备份带冲突标记的文件到: $backup_name"
+                    # 尝试合并并捕获冲突
+                    if ! git merge custom-dev -m "temp merge" > /dev/null 2>&1; then
+                      # 如果有冲突，保存冲突文件
+                      if [ -f "$pattern" ]; then
+                        cp "$pattern" "$backup_name"
+                        echo "✅ 已备份冲突文件到: $backup_name"
+                      fi
+                    fi
+                    
+                    # 清理临时分支
+                    git merge --abort > /dev/null 2>&1 || true
+                    git checkout custom-dev
+                    git branch -D "$temp_branch" > /dev/null 2>&1
                     
                     # 使用main版本
                     git checkout main -- "$pattern"
