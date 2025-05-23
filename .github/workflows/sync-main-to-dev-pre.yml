@@ -14,6 +14,8 @@ env:
   BACKUP_DIR: '.sync-backups'
   TEMP_DIR: '.sync-temp'
   BACKUP_RETAIN_DAYS: 7
+  # 排除文件配置文件路径
+  EXCLUDE_FILES_CONFIG: 'sync-exclude.txt'
 
 jobs:
   sync-branches:
@@ -32,9 +34,9 @@ jobs:
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           echo "✅ Git配置完成"
       
-      - name: 同步main分支到custom-dev
+      - name: 智能同步main分支到custom-dev
         run: |
-          echo "🚀 开始同步main分支到custom-dev分支..."
+          echo "🚀 开始智能同步main分支到custom-dev分支..."
           
           echo "📥 获取最新代码..."
           git fetch origin
@@ -52,203 +54,163 @@ jobs:
             git reset --hard origin/custom-dev
           fi
 
-          echo "🧹 清理可能存在的合并状态..."
-          git merge --abort || true
-
-          echo "🔄 尝试合并main分支..."
-          if git merge --squash main --no-commit; then
-            echo "🔄 排除 workflow 文件..."
-            git restore --staged .github/workflows/
-            git restore .github/workflows/
-            
-            echo "✅ 合并成功"
-            git add -A
-            git commit -m "同步main分支代码"
-            git push --force origin custom-dev
-            exit 0
+          # 检查排除文件配置是否存在
+          if [ ! -f "$EXCLUDE_FILES_CONFIG" ]; then
+            echo "❌ 错误：排除文件配置 $EXCLUDE_FILES_CONFIG 不存在"
+            echo "请先在 custom-dev 分支创建配置文件，定义需要保留的自定义修改"
+            echo "配置文件格式示例："
+            echo "# 这个文件定义了哪些文件应该保留custom-dev分支的修改"
+            echo "# 每行一个文件或目录路径，支持通配符"
+            echo "# 以#开头的行为注释"
+            echo ""
+            echo ".github/workflows/"
+            echo "js/sync/sync.js"
+            echo "player.html"
+            echo "$EXCLUDE_FILES_CONFIG"
+            exit 1
           fi
 
-          echo "检测到冲突，开始智能处理..."
-          
-          # 获取仓库根目录路径和备份目录
+          # 保存配置文件
+          echo "💾 保存配置文件..."
+          mkdir -p "$TEMP_DIR"
+          cp "$EXCLUDE_FILES_CONFIG" "$TEMP_DIR/exclude_config.bak"
+
+          # 读取排除文件列表
+          echo "📋 读取排除文件列表..."
+          EXCLUDE_PATTERNS=()
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            # 跳过空行和注释
+            if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+              continue
+            fi
+            # 去除前后空格
+            line=$(echo "$line" | xargs)
+            if [[ -n "$line" ]]; then
+              EXCLUDE_PATTERNS+=("$line")
+              echo "  - 排除: $line"
+            fi
+          done < "$EXCLUDE_FILES_CONFIG"
+
+          # 创建临时目录存储差异
           REPO_ROOT=$(pwd)
-          echo -e "当前所处目录：$REPO_ROOT"
-          BACKUP_ROOT="../backup_files"
-          
-          # 创建备份根目录
-          rm -rf "$BACKUP_ROOT"
-          mkdir -p "$BACKUP_ROOT"
-          
-          # 获取共同祖先
-          base=$(git merge-base main custom-dev)
-          
-          # 获取所有冲突文件
-          CONFLICT_FILES=$(git diff --name-only --diff-filter=U)
-          
-          # 过滤掉 workflow 文件
-          FILTERED_CONFLICT_FILES=""
-          while IFS= read -r file; do
-            if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
-              FILTERED_CONFLICT_FILES="${FILTERED_CONFLICT_FILES}${file}\n"
-            fi
-          done <<< "$CONFLICT_FILES"
-          
-          echo "📝 发现以下冲突文件（已排除workflow文件）："
-          echo -e "$FILTERED_CONFLICT_FILES"
-          
-          # 创建临时文件存储备份文件列表
-          BACKUP_FILES_LIST="/tmp/backup_files_list.txt"
-          > "$BACKUP_FILES_LIST"  # 清空文件
-          
-          # 修复：逐行处理冲突文件
-          echo -e "$FILTERED_CONFLICT_FILES" | while IFS= read -r file; do
-            if [ -z "$file" ]; then
-              continue
-            fi
-            
-            echo "🔄 处理文件: $file"
-            
-            # 检查文件是否存在
-            if [ ! -f "$file" ]; then
-              echo "⚠️ 警告：文件 $file 不存在，跳过"
-              continue
-            fi
-            
-            # 检查 custom-dev 是否修改了这个文件
-            if git diff --quiet $base HEAD -- "$file"; then
-              echo "✨ $file 在custom-dev中未修改，自动使用main的版本"
-              git checkout --theirs "$file"
-              git add "$file"
-              continue
-            fi
-            
-            echo "⚠️ $file 在custom-dev中有修改，创建备份..."
-            # 在备份目录中创建对应的目录结构
-            file_dir=$(dirname "$file")
-            backup_dir="$BACKUP_ROOT/$file_dir"
-            mkdir -p "$backup_dir"
-            
-            # 创建备份文件
-            backup_name="$(basename "$file").$(date +%Y%m%d_%H%M%S).backup"
-            backup_file="$backup_dir/$backup_name"
-            cp "$file" "$backup_file" || echo "⚠️ 无法创建备份文件: $backup_file"
-            
-            if [ -f "$backup_file" ]; then
-              echo "✅ 备份文件创建成功: $backup_file"
-              # 将备份文件路径添加到列表中，保留相对目录结构
-              backup_relative_path="${file_dir}/${backup_name}"
-              # 清理路径中的多余的 ./ 
-              backup_relative_path=$(echo "$backup_relative_path" | sed 's|^\./||' | sed 's|/\./|/|g')
-              echo "$backup_relative_path" >> "$BACKUP_FILES_LIST"
+          DIFF_DIR="${REPO_ROOT}/$TEMP_DIR/diff-patches"
+          rm -rf "$DIFF_DIR"
+          mkdir -p "$DIFF_DIR"
+
+          # 为每个排除文件创建差异补丁
+          echo "🔍 为排除文件生成差异补丁..."
+          for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+            # 处理目录模式（以/结尾）
+            if [[ "$pattern" == */ ]]; then
+              echo "📄 处理目录: $pattern"
+              # 获取目录下所有文件
+              files=$(find "$pattern" -type f 2>/dev/null || echo "")
+              for file in $files; do
+                if [ -f "$file" ]; then
+                  # 为每个文件创建差异补丁
+                  patch_file="${DIFF_DIR}/${file//\//_}.patch"
+                  echo "  - 为文件创建补丁: $file"
+                  git diff main custom-dev -- "$file" > "$patch_file"
+                fi
+              done
+            # 处理具体文件或通配符
+            else
+              # 改进通配符模式的文件匹配
+              files=$(find . -path "./$pattern" -o -path "$pattern" 2>/dev/null || echo "")
+              if [ -z "$files" ]; then
+                # 尝试使用通配符展开
+                shopt -s nullglob
+                files=($pattern)
+                shopt -u nullglob
+              fi
               
-              echo "📥 使用main分支版本..."
-              git checkout main -- "$file"
-              git add "$file"
+              for file in $files; do
+                if [ -f "$file" ]; then
+                  patch_file="${DIFF_DIR}/${file//\//_}.patch"
+                  echo "📄 为文件创建补丁: $file"
+                  git diff main custom-dev -- "$file" > "$patch_file"
+                fi
+              done
             fi
           done
+
+          # 创建临时分支（基于main）
+          echo "🔄 创建临时分支（基于main）..."
+          git checkout main
+          git checkout -b temp-sync-branch
           
-          # 读取备份文件列表
-          BACKUP_FILES=""
-          if [ -f "$BACKUP_FILES_LIST" ]; then
-            BACKUP_FILES=$(cat "$BACKUP_FILES_LIST")
-          fi
+          # 恢复配置文件
+          echo "🔄 恢复配置文件..."
+          mkdir -p $(dirname "$EXCLUDE_FILES_CONFIG")
+          cp "$TEMP_DIR/exclude_config.bak" "$EXCLUDE_FILES_CONFIG"
+
+          # 应用差异补丁
+          echo "🔄 应用custom-dev分支的修改..."
+          PATCH_COUNT=0
+          REJECT_COUNT=0
           
-          # 清理当前状态
-          git reset --hard HEAD
-          git clean -f -d
-          
-          # 获取 main 分支的所有更改
-          echo "📥 同步 main 分支的所有更改..."
-          git checkout main -- .
-          
-          # 恢复 workflow 文件
-          echo "🔄 恢复原有的workflow文件..."
-          rm -rf .github/workflows/*  # 删除从main分支获取的workflow文件
-          git checkout custom-dev -- .github/workflows/  # 恢复custom-dev分支的workflow文件
-          
-          # 恢复备份文件
-          echo "📥 恢复备份文件..."
-          if [ -d "$BACKUP_ROOT" ]; then
-            cp -r "$BACKUP_ROOT"/* .
-            # 清理备份文件夹
-            echo "🧹 清理备份文件夹..."
-            rm -rf "$BACKUP_ROOT"
-          fi
-          
-          # 提交所有更改
-          echo "⚠️ 提交同步的main分支代码和冲突文件备份"
-          git add -A
-          git commit -m "同步main分支代码，并保存冲突文件备份" || echo "没有需要提交的更改"
-          git push --force origin custom-dev
-          
-          # 设置环境变量用于创建Issue
-          if [ ! -z "$BACKUP_FILES" ]; then
-            echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
-            echo "$BACKUP_FILES" >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
-            
-            echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
-            echo -e "$FILTERED_CONFLICT_FILES" >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
-            
-            # 设置标志，表示需要创建Issue
-            echo "NEED_CREATE_ISSUE=true" >> $GITHUB_ENV
-            
-            echo "📋 检测到冲突文件，将创建Issue报告冲突情况..."
+          # 检查补丁目录是否存在补丁文件
+          if [ -d "$DIFF_DIR" ] && [ "$(ls -A "$DIFF_DIR" 2>/dev/null)" ]; then
+            for patch_file in "$DIFF_DIR"/*.patch; do
+              if [ -s "$patch_file" ]; then  # 只处理非空补丁文件
+                # 从补丁文件名恢复原始文件路径
+                original_file=$(basename "$patch_file" .patch | tr '_' '/')
+                
+                echo "📄 应用补丁到文件: $original_file"
+                PATCH_COUNT=$((PATCH_COUNT + 1))
+                
+                # 创建目录（如果需要）
+                mkdir -p "$(dirname "$original_file")" 2>/dev/null || true
+                
+                # 应用补丁
+                if ! git apply --ignore-whitespace --reject "$patch_file" 2>/dev/null; then
+                  echo "⚠️ 补丁应用失败，尝试使用宽松模式..."
+                  if ! git apply --ignore-whitespace --reject --ignore-space-change --3way "$patch_file" 2>/dev/null; then
+                    echo "❌ 无法应用补丁到: $original_file"
+                    REJECT_COUNT=$((REJECT_COUNT + 1))
+                  fi
+                fi
+              fi
+            done
           else
-            echo "✅ 所有冲突已自动处理"
+            echo "ℹ️ 没有找到需要应用的补丁文件"
+          fi
+          
+          # 检查是否有拒绝的补丁
+          REJECT_FILES=$(find . -name "*.rej")
+          if [ -n "$REJECT_FILES" ]; then
+            echo "⚠️ 警告：以下文件的补丁应用失败："
+            echo "$REJECT_FILES"
+            echo "请手动检查这些文件"
+          fi
+          
+          echo "📊 补丁统计: 应用 $PATCH_COUNT 个补丁，$REJECT_COUNT 个失败"
+
+          # 清理差异目录
+          rm -rf "$DIFF_DIR"
+          
+          # 提交更改
+          echo "📝 提交更改..."
+          git add -A
+          
+          # 检查是否有更改需要提交
+          if git diff --cached --quiet; then
+            echo "✅ 没有需要提交的更改，同步完成"
+          else
+            git commit -m "同步main分支代码，保留custom-dev分支的自定义修改"
+            
+            echo "🚀 推送到custom-dev分支..."
+            git push --force origin temp-sync-branch:custom-dev
+            
+            echo "✅ 同步完成"
           fi
 
-      - name: 创建Issue报告
-        if: env.NEED_CREATE_ISSUE == 'true'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            console.log('📝 正在创建同步冲突报告...');
-            
-            const issueBody = `
-            # main -> custom-dev 同步冲突报告
-            
-            在同步过程中发现以下文件存在冲突，已自动使用main分支的代码并备份原文件。
-            
-            ## 冲突文件列表
-            \`\`\`
-            ${process.env.CONFLICT_FILES}
-            \`\`\`
-            
-            ## 备份文件
-            已在每个冲突文件的同目录下创建备份文件：
-            \`\`\`
-            ${process.env.BACKUP_FILES}
-            \`\`\`
-            
-            ## 处理说明
-            1. 所有冲突文件已使用main分支的版本
-            2. custom-dev分支的原始代码已在同目录下备份
-            3. 如需恢复或合并自定义代码，请参考备份文件
-            
-            ## 手动处理步骤
-            1. 检查备份文件内容
-            2. 如需修改，请在custom-dev分支上进行更改
-            3. 确保更改后的代码与main分支的改动不冲突
-            `;
-            
-            console.log('📤 提交Issue...');
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: '🔄 main -> custom-dev 同步冲突报告',
-              body: issueBody,
-              labels: ['sync-conflict']
-            });
-            console.log('✅ Issue创建成功');
-
-      - name: Cleanup temp files
+      - name: 清理临时文件
         if: always()
         run: |
           rm -rf $TEMP_DIR
           echo "🧹 清理临时文件完成"
       
-      - name: Notify result
+      - name: 通知结果
         run: |
-          echo "✅ 同步流程已完成。请检查 custom-dev 分支，如有 .backup 文件请手动 diff 并处理。" 
+          echo "✅ 智能同步流程已完成。custom-dev 分支现在包含 main 分支的代码，并保留了排除列表中指定的自定义修改。" 

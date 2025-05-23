@@ -1,4 +1,4 @@
-name: 同步main到dev测试分支（基于merge差分）
+name: 同步main到dev测试分支(基于merge-base)
 
 on:
   # 只允许手动触发
@@ -32,8 +32,7 @@ jobs:
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           echo "✅ Git配置完成"
       
-      - name: 第一步 - 合并main分支
-        id: merge
+      - name: 同步main分支到custom-dev
         run: |
           echo "🚀 开始同步main分支到custom-dev分支..."
           
@@ -67,28 +66,26 @@ jobs:
             git commit -m "同步main分支代码"
             git push --force origin custom-dev
             exit 0
-          else
-            echo "合并发生冲突，进入第二步"
-            exit 1
           fi
 
-      - name: 第二步 - 备份冲突文件并使用main版本
-        if: failure() && steps.merge.outcome == 'failure'
-        id: auto_merge
-        run: |
-          echo "🔄 开始处理合并冲突..."
+          echo "检测到冲突，开始智能处理..."
           
-          # 先获取冲突文件列表
-          CONFLICT_FILES=$(git status --porcelain | grep "^UU" | cut -c4-)
+          # 获取仓库根目录路径和备份目录
+          REPO_ROOT=$(pwd)
+          echo -e "当前所处目录：$REPO_ROOT"
+          BACKUP_ROOT="../backup_files"
           
-          if [ -z "$CONFLICT_FILES" ]; then
-            echo "❌ 没有检测到冲突文件，可能是其他错误"
-            echo "💡 当前git状态："
-            git status
-            exit 1
-          fi
-
-          # 过滤掉 workflow 文件，并确保每个文件单独一行
+          # 创建备份根目录
+          rm -rf "$BACKUP_ROOT"
+          mkdir -p "$BACKUP_ROOT"
+          
+          # 获取共同祖先
+          base=$(git merge-base main custom-dev)
+          
+          # 获取所有冲突文件
+          CONFLICT_FILES=$(git diff --name-only --diff-filter=U)
+          
+          # 过滤掉 workflow 文件
           FILTERED_CONFLICT_FILES=""
           while IFS= read -r file; do
             if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
@@ -96,28 +93,15 @@ jobs:
             fi
           done <<< "$CONFLICT_FILES"
           
-          # 移除最后的换行符
-          FILTERED_CONFLICT_FILES=$(echo -e "$FILTERED_CONFLICT_FILES" | sed '$ s/\\n$//')
-          CONFLICT_FILES="$FILTERED_CONFLICT_FILES"
-
           echo "📝 发现以下冲突文件（已排除workflow文件）："
-          echo -e "$CONFLICT_FILES"
+          echo -e "$FILTERED_CONFLICT_FILES"
           
-          echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
-          echo -e "$CONFLICT_FILES" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
-          BACKUP_FILES=""
+          # 创建临时文件存储备份文件列表
+          BACKUP_FILES_LIST="/tmp/backup_files_list.txt"
+          > "$BACKUP_FILES_LIST"  # 清空文件
           
-          # 获取仓库根目录路径
-          REPO_ROOT=$(pwd)
-          BACKUP_ROOT="../backup_files"
-          
-          # 创建备份根目录
-          rm -rf "$BACKUP_ROOT"
-          mkdir -p "$BACKUP_ROOT"
-          
-          while IFS= read -r file; do
+          # 修复：逐行处理冲突文件
+          echo -e "$FILTERED_CONFLICT_FILES" | while IFS= read -r file; do
             if [ -z "$file" ]; then
               continue
             fi
@@ -130,7 +114,15 @@ jobs:
               continue
             fi
             
-            echo "💾 创建备份文件..."
+            # 检查 custom-dev 是否修改了这个文件
+            if git diff --quiet $base HEAD -- "$file"; then
+              echo "✨ $file 在custom-dev中未修改，自动使用main的版本"
+              git checkout --theirs "$file"
+              git add "$file"
+              continue
+            fi
+            
+            echo "⚠️ $file 在custom-dev中有修改，创建备份..."
             # 在备份目录中创建对应的目录结构
             file_dir=$(dirname "$file")
             backup_dir="$BACKUP_ROOT/$file_dir"
@@ -143,13 +135,23 @@ jobs:
             
             if [ -f "$backup_file" ]; then
               echo "✅ 备份文件创建成功: $backup_file"
-              BACKUP_FILES="${BACKUP_FILES}\n$backup_file"
+              # 将备份文件路径添加到列表中，保留相对目录结构
+              backup_relative_path="${file_dir}/${backup_name}"
+              # 清理路径中的多余的 ./ 
+              backup_relative_path=$(echo "$backup_relative_path" | sed 's|^\./||' | sed 's|/\./|/|g')
+              echo "$backup_relative_path" >> "$BACKUP_FILES_LIST"
               
               echo "📥 使用main分支版本..."
               git checkout main -- "$file"
               git add "$file"
             fi
-          done <<< "$FILTERED_CONFLICT_FILES"
+          done
+          
+          # 读取备份文件列表
+          BACKUP_FILES=""
+          if [ -f "$BACKUP_FILES_LIST" ]; then
+            BACKUP_FILES=$(cat "$BACKUP_FILES_LIST")
+          fi
           
           # 清理当前状态
           git reset --hard HEAD
@@ -173,21 +175,32 @@ jobs:
             rm -rf "$BACKUP_ROOT"
           fi
           
-          # 提交main分支更改和备份文件
+          # 提交所有更改
           echo "⚠️ 提交同步的main分支代码和冲突文件备份"
           git add -A
           git commit -m "同步main分支代码，并保存冲突文件备份" || echo "没有需要提交的更改"
           git push --force origin custom-dev
           
-          echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
-          echo -e "$BACKUP_FILES" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-          
-          echo "📋 创建Issue报告冲突情况..."
-          exit 1
+          # 设置环境变量用于创建Issue
+          if [ ! -z "$BACKUP_FILES" ]; then
+            echo "BACKUP_FILES<<EOF" >> $GITHUB_ENV
+            echo "$BACKUP_FILES" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            
+            echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
+            echo -e "$FILTERED_CONFLICT_FILES" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            
+            # 设置标志，表示需要创建Issue
+            echo "NEED_CREATE_ISSUE=true" >> $GITHUB_ENV
+            
+            echo "📋 检测到冲突文件，将创建Issue报告冲突情况..."
+          else
+            echo "✅ 所有冲突已自动处理"
+          fi
 
-      - name: 第三步 - 创建Issue报告
-        if: failure() && steps.auto_merge.outcome == 'failure'
+      - name: 创建Issue报告
+        if: env.NEED_CREATE_ISSUE == 'true'
         uses: actions/github-script@v6
         with:
           script: |

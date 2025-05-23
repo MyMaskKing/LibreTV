@@ -1,0 +1,19 @@
+# 这个文件定义了哪些文件应该保留custom-dev分支的修改
+# 每行一个文件或目录路径，支持通配符
+# 以#开头的行为注释
+
+# 工作流文件 - 保留custom-dev分支的CI/CD配置
+.github/workflows/
+
+# 云同步相关文件
+js/sync/sync.js
+player.html
+
+# HTML页面 
+index.html
+
+# 配置文件
+js/config.js
+
+# 配置文件本身（必须保留）
+sync-exclude.txt
