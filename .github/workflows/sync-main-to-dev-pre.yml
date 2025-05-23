@@ -152,7 +152,7 @@ jobs:
                   echo "⚠️ 补丁应用失败: $pattern"
                   # 检查文件在main分支是否存在
                   if git cat-file -e main:"$pattern" 2>/dev/null; then
-                    echo "📄 文件在main分支存在，准备处理冲突"
+                    echo "📄 文件在main分支存在，使用mian版本，准备备份custom-dev版本"
                     # 确保目录存在
                     mkdir -p "$(dirname "$pattern")"
                     
@@ -171,10 +171,11 @@ jobs:
                     
                     # 使用merge-file进行三方合并
                     backup_name="${pattern}.$(date +%Y%m%d_%H%M%S).merge.bak"
+                    # 复制custom-dev的内容作为当前文件
                     cp "$temp_dev" "$backup_name"
                     git merge-file -p -L "custom-dev" -L "base" -L "main" "$temp_dev" "$temp_base" "$temp_main" > "$backup_name" || true
                     
-                    echo "✅ 已备份带冲突标记的文件到: $backup_name"
+                    echo "✅ 已备份文件到: $backup_name"
                     
                     # 使用main版本
                     git checkout main -- "$pattern"
@@ -216,15 +217,13 @@ jobs:
             echo -e "$CONFLICT_SUMMARY" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
             
-            echo "NEED_CREATE_ISSUE=true" >> $GITHUB_ENV
-            
             echo "📋 检测到修改的文件，将创建Issue报告..."
           fi
           
           echo "✅ 同步完成"
 
       - name: 创建Issue报告
-        if: env.NEED_CREATE_ISSUE == 'true'
+        if: env.CONFLICT_FILES
         uses: actions/github-script@v6
         with:
           script: |
@@ -247,14 +246,19 @@ jobs:
             
             ## 处理说明
             1. 所有文件已更新到main分支版本
-            2. 对于 sync-exclude.txt 中的目录，使用custom-dev分支的完整内容
+            2. 对于 sync-exclude.txt 中的目录：
+               - 使用custom-dev分支的完整内容
             3. 对于 sync-exclude.txt 中的文件：
-               - 尝试将custom-dev的修改作为补丁应用到main的版本上
-               - 如果补丁应用失败，则使用custom-dev的完整文件
+               - 如果文件在main分支不存在：保留custom-dev版本
+               - 如果文件在main分支存在：
+                 - 使用main分支版本
+                 - 已备份custom-dev版本（.merge.bak文件）
+                 - 备份文件包含两个分支的差异对比
             
             ## 后续步骤
             1. 检查处理结果是否符合预期
-            2. 如需调整，请在custom-dev分支上进行修改
+            2. 查看备份文件（.merge.bak）了解文件变更
+            3. 如需调整，请在custom-dev分支上进行修改
             `;
             
             console.log('📤 提交Issue...');
