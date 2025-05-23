@@ -97,6 +97,12 @@ jobs:
                   echo "$pattern" >> "$BACKUP_FILES_LIST"
                   echo "✅ 备份已修改的目录: $pattern"
                 fi
+                # 保存到临时目录用于后续恢复
+                target_dir="$TEMP_DIR/$(dirname "$pattern")"
+                mkdir -p "$target_dir"
+                # 先删除目标目录，再复制
+                rm -rf "$TEMP_DIR/$pattern"
+                cp -r "$pattern" "$TEMP_DIR/$(dirname "$pattern")/"
               fi
             else
               # 如果是文件
@@ -121,6 +127,15 @@ jobs:
           
           echo "🔄 切换到main分支代码..."
           git checkout main -- .
+          
+          # 确保 .gitignore 包含临时目录
+          echo "确保临时目录不被git跟踪..."
+          if ! grep -q "^$TEMP_DIR" .gitignore; then
+            echo "$TEMP_DIR" >> .gitignore
+          fi
+          if ! grep -q "^$BACKUP_DIR" .gitignore; then
+            echo "$BACKUP_DIR" >> .gitignore
+          fi
           
           echo "📥 恢复保留的文件..."
           if [ -d "$TEMP_DIR" ]; then
