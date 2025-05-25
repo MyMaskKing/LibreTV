@@ -69,50 +69,6 @@ class WebDAVClient {
         return false;
       }
 
-      // 2. 测试文件操作权限
-      const testFileName = `test_${Date.now()}.txt`;
-      const testContent = 'test';
-      
-      // 尝试创建测试文件
-      const createTest = await fetch(`${this.config.url}/${testFileName}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': 'Basic ' + btoa(`${this.config.username}:${this.config.password}`),
-          'Content-Type': 'text/plain'
-        },
-        body: testContent
-      });
-
-      if (!createTest.ok) {
-        console.error('WebDAV 写入权限测试失败:', createTest.status);
-        return false;
-      }
-
-      // 尝试读取测试文件
-      const readTest = await fetch(`${this.config.url}/${testFileName}`, {
-        headers: {
-          'Authorization': 'Basic ' + btoa(`${this.config.username}:${this.config.password}`)
-        }
-      });
-
-      if (!readTest.ok) {
-        console.error('WebDAV 读取权限测试失败:', readTest.status);
-        return false;
-      }
-
-      // 尝试删除测试文件
-      const deleteTest = await fetch(`${this.config.url}/${testFileName}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': 'Basic ' + btoa(`${this.config.username}:${this.config.password}`)
-        }
-      });
-
-      if (!deleteTest.ok) {
-        console.error('WebDAV 删除权限测试失败:', deleteTest.status);
-        return false;
-      }
-
       return true;
     } catch (e) {
       console.error('WebDAV 连接测试失败:', e);
