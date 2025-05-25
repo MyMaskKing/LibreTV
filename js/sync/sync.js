@@ -734,16 +734,7 @@ class SyncManager {
       clearTimeout(this.syncDebounceTimer);
     }
 
-    // 添加时间间隔检查，避免频繁同步
-    const now = Date.now();
-    const lastSyncTime = parseInt(localStorage.getItem('lastSyncTime') || '0');
-    const minSyncInterval = 5 * 60 * 1000; // 最小同步间隔5分钟
-    
-    if (now - lastSyncTime < minSyncInterval) {
-      console.log(`距离上次同步时间不足${Math.floor(minSyncInterval/60000)}分钟，跳过同步`);
-      return;
-    }
-
+    // 移除时间间隔检查，只保留数据变化检测
     this.syncDebounceTimer = setTimeout(async () => {
       if (this.syncInProgress) {
         console.log('同步操作正在进行中，跳过此次同步');
@@ -773,20 +764,18 @@ class SyncManager {
         this.syncInProgress = true;
         this.updateSyncStatus('syncing');
         
-        // 显示Toast提示，不再检查页面类型
-        showToast('正在同步数据到云端...', 'info');
 
         // 确保 WebDAV 客户端已初始化
         if (!this.webdavClient && this.credentialId) {
           this.webdavClient = new WebDAVClient(this.credentialId);
         }
 
-        const success = await this.syncToCloud();
+        const success = await this.syncToCloud(false); // 手动同步
         if (success) {
           this.updateSyncStatus('success');
           
-          // 显示Toast提示，不再检查页面类型
-          showToast('数据已成功同步到云端', 'success');
+          // 更新数据快照
+          this.updateDataSnapshot();
           
           // 广播同步完成消息
           this.syncChannel.postMessage({
@@ -794,14 +783,8 @@ class SyncManager {
             pageId: this.pageId,
             lastSyncTime: this.lastSyncTime
           });
-          
-          // 更新数据快照
-          this.updateDataSnapshot();
         } else {
           this.updateSyncStatus('error');
-          
-          // 显示Toast提示，不再检查页面类型
-          showToast('同步到云端失败，请检查网络连接', 'error');
         }
       } catch (error) {
         console.error('同步失败:', error);
@@ -835,7 +818,7 @@ class SyncManager {
     
     // 如果键的数量不同，说明有变化
     if (currentDataKeys.length !== lastDataKeys.length) {
-      console.log('数据键数量发生变化，需要同步');
+      console.log(`数据键数量发生变化，从 ${lastDataKeys.length} 变为 ${currentDataKeys.length}`);
       return true;
     }
     
@@ -843,9 +826,31 @@ class SyncManager {
     let hasChanges = false;
     let changedKeys = [];
     
+    // 定义重要键列表 - 这些键的变化会立即触发同步
+    const importantKeys = [
+      'viewingHistory',    // 观看历史
+      'videoProgress_',    // 视频进度
+      'currentPlayingId',  // 当前播放ID
+      'selectedAPIs',      // 选中的API
+      'yellowFilterEnabled', // 黄色内容过滤设置
+      'adFilteringEnabled'   // 广告过滤设置
+    ];
+    
     for (const key of currentDataKeys) {
+      // 检查键值是否变化
       if (currentData[key] !== this.lastSyncDataSnapshot[key]) {
         changedKeys.push(key);
+        
+        // 检查是否是重要键或其前缀
+        const isImportantKey = importantKeys.some(importantKey => 
+          key === importantKey || key.startsWith(importantKey)
+        );
+        
+        if (isImportantKey) {
+          console.log(`检测到重要键 ${key} 的值发生变化，需立即同步`);
+          return true; // 重要键变化立即返回true
+        }
+        
         hasChanges = true;
       }
     }
@@ -875,6 +880,8 @@ class SyncManager {
     
     // 忽略lastSyncTime的变化，避免循环触发
     if (event.key === 'lastSyncTime') return;
+
+    console.log(`检测到键 ${event.key} 变化，准备同步`);
 
     // 确保 WebDAV 客户端已初始化
     if (!this.webdavClient && this.credentialId) {
@@ -1018,7 +1025,7 @@ class SyncManager {
     document.head.appendChild(style);
   }
 
-  // 同步管理器
+  // 同步管理器初始化
   async init(credentialId) {
     if (!credentialId) {
       console.error('初始化失败: 凭据ID为空');
@@ -1046,56 +1053,8 @@ class SyncManager {
     }
   }
 
-  // 开启同步
-  async enableSync() {
-    if (!this.credentialId) {
-      console.error('开启同步失败: 凭据ID为空');
-      return false;
-    }
-    
-    try {
-      // 确保 WebDAV 客户端已初始化
-      if (!this.webdavClient) {
-        this.webdavClient = new WebDAVClient(this.credentialId);
-      }
-      
-      const connected = await this.webdavClient.testConnection();
-      if (!connected) {
-        console.error('开启同步失败: WebDAV 连接测试失败');
-        return false;
-      }
-      
-      this.syncEnabled = true;
-      localStorage.setItem('cloudSyncEnabled', 'true');
-      localStorage.setItem('credentialId', this.credentialId);
-      
-      console.log('云同步已开启，准备进行首次同步');
-      
-      // 立即进行一次同步
-      const syncResult = await this.syncToCloud();
-      if (!syncResult) {
-        console.error('首次同步失败');
-      }
-      
-      // 启动定时同步
-      this.startAutoSync();
-      
-      return true;
-    } catch (error) {
-      console.error('开启同步过程发生错误:', error);
-      return false;
-    }
-  }
-
-  // 关闭同步
-  disableSync() {
-    this.syncEnabled = false;
-    localStorage.setItem('cloudSyncEnabled', 'false');
-    this.stopAutoSync();
-  }
-
   // 同步到云端
-  async syncToCloud() {
+  async syncToCloud(isAutoSync = false) {
     if (!this.syncEnabled || !this.webdavClient) {
       console.error('同步失败: 同步未启用或 WebDAV 客户端未初始化');
       return false;
@@ -1120,11 +1079,15 @@ class SyncManager {
 
       console.log('开始执行同步到云端操作');
       
+      // 显示开始同步的提示
+      showToast(isAutoSync ? '检测到数据变化，正在自动同步到云端...' : '正在同步数据到云端...', 'info');
+      
       // 先测试连接
       console.log('测试 WebDAV 连接...');
       const connected = await this.webdavClient.testConnection();
       if (!connected) {
         console.error('同步失败: WebDAV 连接测试失败');
+        showToast('WebDAV连接失败，请检查网络', 'error');
         return false;
       }
       console.log('WebDAV 连接测试成功');
@@ -1150,13 +1113,20 @@ class SyncManager {
         // 更新数据快照
         this.updateDataSnapshot();
         
+        // 无论是自动还是手动同步，都显示成功提示
+        showToast(isAutoSync ? '数据已自动同步到云端' : '数据已成功同步到云端', 'success');
+        
         return true;
       }
 
       console.error('同步失败: 上传数据失败');
+      // 无论是自动还是手动同步，都显示失败提示
+      showToast('同步到云端失败，请检查网络连接', 'error');
       return false;
     } catch (error) {
       console.error('同步过程发生错误:', error);
+      // 无论是自动还是手动同步，都显示错误提示
+      showToast('同步到云端失败，请稍后重试', 'error');
       return false;
     } finally {
       // 如果是由此方法获取的锁，则释放
@@ -1423,17 +1393,26 @@ class SyncManager {
       
       console.log('定时同步：检测到数据变化，开始同步');
       
+      // 显示同步状态图标
+      this.updateSyncStatus('syncing');
+      
       // 尝试获取同步锁
       const lockAcquired = await this.acquireSyncLock();
       if (lockAcquired) {
         try {
-          await this.syncToCloud();
+          const success = await this.syncToCloud(true); // 自动同步，使用特定提示
+          if (success) {
+            this.updateSyncStatus('success');
+          } else {
+            this.updateSyncStatus('error');
+          }
         } finally {
           // 释放同步锁
           this.releaseSyncLock();
         }
       } else {
         console.log('定时同步：无法获取同步锁，跳过同步');
+        this.updateSyncStatus('error');
       }
     }, this.syncInterval);
   }
@@ -1538,7 +1517,11 @@ class SyncManager {
   // 关闭云同步
   async disableCloudSync() {
     try {
-      this.disableSync();
+      // 停用同步功能
+      this.syncEnabled = false;
+      localStorage.setItem('cloudSyncEnabled', 'false');
+      // 停止自动同步
+      this.stopAutoSync();
       showToast('云同步已关闭', 'info');
     } catch (error) {
       console.error('关闭云同步失败:', error);
