@@ -86,13 +86,13 @@ jobs:
           rm -rf "$TEMP_PATCH_DIR"
           mkdir -p "$TEMP_PATCH_DIR"
           
-          # 创建冲突文件列表
+          # 创建冲突文件列表和处理结果
           CONFLICT_FILES=""
           CONFLICT_SUMMARY=""
           
           # 首先，获取所有custom-dev中的修改
           echo "📥 备份custom-dev的修改..."
-          echo "$EXCLUDE_PATTERNS" | while IFS= read -r pattern; do
+          while IFS= read -r pattern; do
             if [ -z "$pattern" ]; then
               continue
             fi
@@ -110,7 +110,7 @@ jobs:
                 git diff main...custom-dev -- "$pattern" > "$TEMP_PATCH_DIR/$(basename "$pattern").patch"
               fi
             fi
-          done
+          done < <(echo "$EXCLUDE_PATTERNS")
           
           # 切换到main分支的内容
           echo "🔄 更新所有文件到main分支版本..."
@@ -200,7 +200,6 @@ jobs:
           echo "🧹 清理临时文件完成"
           
           # 提交更改
-          # 排除临时文件和目录
           git add -A
           git reset HEAD "$TEMP_DIR" "$BACKUP_DIR"
           git clean -fd "$TEMP_DIR"
@@ -210,14 +209,22 @@ jobs:
           # 如果有冲突文件，设置环境变量用于创建Issue
           if [ ! -z "$CONFLICT_FILES" ]; then
             {
-              echo 'HAS_CONFLICTS=true'
-              echo 'CONFLICT_FILES<<EOFCF'
+              echo "HAS_CONFLICTS=true"
+              echo "CONFLICT_FILES<<EOFCF"
               echo -e "$CONFLICT_FILES"
-              echo 'EOFCF'
-              echo 'CONFLICT_SUMMARY<<EOFCS'
+              echo "EOFCF"
+              echo "CONFLICT_SUMMARY<<EOFCS"
               echo -e "$CONFLICT_SUMMARY"
-              echo 'EOFCS'
-            } >> $GITHUB_ENV
+              echo "EOFCS"
+            } >> "$GITHUB_ENV"
+            
+            # 输出调试信息
+            echo "DEBUG: 设置的环境变量内容："
+            echo "HAS_CONFLICTS=true"
+            echo "CONFLICT_FILES:"
+            echo -e "$CONFLICT_FILES"
+            echo "CONFLICT_SUMMARY:"
+            echo -e "$CONFLICT_SUMMARY"
             
             echo "📋 检测到修改的文件，将创建Issue报告..."
           fi
@@ -230,8 +237,11 @@ jobs:
         with:
           script: |
             console.log('📝 正在创建同步报告...');
-            console.log('冲突文件列表:', process.env.CONFLICT_FILES);
-            console.log('处理结果:', process.env.CONFLICT_SUMMARY);
+            console.log('环境变量状态：', {
+              hasConflicts: process.env.HAS_CONFLICTS,
+              conflictFiles: process.env.CONFLICT_FILES,
+              conflictSummary: process.env.CONFLICT_SUMMARY
+            });
             
             const issueBody = `
             # main -> custom-dev 同步报告
