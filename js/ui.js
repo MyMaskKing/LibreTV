@@ -27,7 +27,7 @@ function showToast(message, type = 'error') {
         toast = document.createElement('div');
         toast.id = 'toast';
         toast.className = 'fixed top-4 left-1/2 -translate-x-1/2 px-6 py-3 rounded-lg shadow-lg transform transition-all duration-300 z-50 opacity-0';
-        
+        toast.style = 'z-index: 2147483647'
         toastMessage = document.createElement('p');
         toastMessage.id = 'toastMessage';
         toast.appendChild(toastMessage);
@@ -393,7 +393,7 @@ function loadViewingHistory() {
             '未知来源';
             
         const episodeText = item.episodeIndex !== undefined ? 
-            `第${item.episodeIndex + 1}集` : '';
+            `${item.episodeIndex + 1}` : '';
         
         // 格式化进度信息
         let progressHtml = '';

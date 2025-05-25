@@ -88,6 +88,7 @@ let shortcutHintTimeout = null; // 用于控制快捷键提示显示时间
 let adFilteringEnabled = true; // 默认开启广告过滤
 let progressSaveInterval = null; // 定期保存进度的计时器
 let currentVideoUrl = ''; // 记录当前实际的视频URL
+const isWebkit = (typeof window.webkitConvertPointFromNodeToPage === 'function')
 
 // 页面加载
 document.addEventListener('DOMContentLoaded', function () {
@@ -662,6 +663,7 @@ function initPlayer(videoUrl) {
                 videoHasEnded = false; // 重置标志
             }, 1000);
         } else {
+            art.fullscreen = false;
         }
     });
 
@@ -812,7 +814,7 @@ function renderEpisodes() {
             <button id="episode-${realIndex}" 
                     onclick="playEpisode(${realIndex})" 
                     class="px-4 py-2 ${isActive ? 'episode-active' : '!bg-[#222] hover:!bg-[#333] hover:!shadow-none'} !border ${isActive ? '!border-blue-500' : '!border-[#333]'} rounded-lg transition-colors text-center episode-btn">
-                第${realIndex + 1}集
+                ${realIndex + 1}
             </button>
         `;
     });
@@ -868,7 +870,11 @@ function playEpisode(index) {
     currentUrl.searchParams.delete('position');
     window.history.replaceState({}, '', currentUrl.toString());
 
-    initPlayer(url);
+    if (isWebkit) {
+        initPlayer(url);
+    } else {
+        art.switch = url;
+    }
 
     // 更新UI
     updateEpisodeInfo();

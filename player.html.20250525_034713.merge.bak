@@ -131,7 +131,11 @@
         top: 0;
         left: 0;
         width: 100vw;
+<<<<<<< custom-dev
+        z-index: 2147483647 !important;
+=======
         z-index: 10000000 !important;
+>>>>>>> main
         pointer-events: auto !important;
         background: #111;
       }
@@ -158,6 +162,24 @@
             </button>
         </div>
         <h2 id="videoTitle" class="text-xl font-semibold flex-1 text-center overflow-x-auto whitespace-nowrap truncate custom-title-scroll"></h2>
+<<<<<<< custom-dev
+        <!-- 修改返回按钮，提供两个选项：返回上一页和返回首页 -->
+        <div class="flex space-x-2">
+            <a href="javascript:void(0);" onclick="window.close();" class="px-4 py-2 bg-[#222] hover:bg-[#333] border border-[#333] rounded-lg transition-colors flex items-center min-w-0">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 12H5M12 19l-7-7 7-7" />
+                </svg>
+                <span class="back-btn-text">返回</span>
+            </a>
+            <a href="/" class="px-4 py-2 bg-[#222] hover:bg-[#333] border border-[#333] rounded-lg transition-colors flex items-center min-w-0 home-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 21V9.5l-7-5-7 5V21a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2z" />
+                  <path d="M9 22V12h6v10" />
+                </svg>
+                <span class="home-btn-text">首页</span>
+            </a>
+        </div>
+=======
         <a href="#" id="goBack" onclick="goBack(event)" class="px-4 py-2 bg-[#222] hover:bg-[#333] border border-[#333] rounded-lg transition-colors flex items-center min-w-0 home-btn">
             <svg class="w-5 h-5 mr-1" viewBox="0 0 24 24" fill="#ffffff" xmlns="http://www.w3.org/2000/svg">
                 <path d="M5.25 11h15a1.5 1.5 0 1 1 0 3H5.25a1.5 1.5 0 0 1 0-3z"/>
@@ -165,6 +187,7 @@
             </svg>
             <span class="home-btn-text">上一页</span>
         </a>
+>>>>>>> main
     </header>
 
     <!-- 密码验证弹窗 -->
@@ -368,8 +391,13 @@
                             window.location.replace('/');
                         } catch (e2) {
                             window.location.assign('/');
+<<<<<<< custom-dev
                     }
                     }
+=======
+                    }
+                    }
+>>>>>>> main
                     return false;
                 }
             });
