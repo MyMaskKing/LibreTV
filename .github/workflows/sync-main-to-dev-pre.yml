@@ -103,8 +103,6 @@ jobs:
                 echo "💾 备份目录: $pattern"
                 cp -r "$pattern" "$TEMP_PATCH_DIR/"
                 # 记录目录处理
-                CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
-                CONFLICT_SUMMARY="${CONFLICT_SUMMARY}目录 ${pattern} 已备份\n"
               fi
             else
               # 是文件
@@ -112,8 +110,6 @@ jobs:
                 echo "📝 创建补丁: $pattern"
                 git diff main...custom-dev -- "$pattern" > "$TEMP_PATCH_DIR/$(basename "$pattern").patch"
                 # 记录文件处理
-                CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
-                CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 已创建补丁\n"
               fi
             fi
           done < <(echo "$EXCLUDE_PATTERNS")
@@ -139,8 +135,8 @@ jobs:
                 
                 # 记录冲突信息
                 if ! git diff --quiet HEAD -- "$pattern"; then
-                  CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
-                  CONFLICT_SUMMARY="${CONFLICT_SUMMARY}目录 ${pattern} 有修改，使用custom-dev版本\n"
+                  CONFLICT_FILES="${CONFLICT_FILES}目录: ${pattern}\n"
+                  CONFLICT_SUMMARY="${CONFLICT_SUMMARY}✅ 目录 ${pattern} 直接使用custom-dev版本\n"
                 fi
               fi
             else
@@ -152,8 +148,8 @@ jobs:
                 if git apply --check "$TEMP_PATCH_DIR/$(basename "$pattern").patch" 2>/dev/null; then
                   echo "✅ 应用补丁到: $pattern"
                   git apply --whitespace=fix "$TEMP_PATCH_DIR/$(basename "$pattern").patch"
-                  CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
-                  CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 补丁应用成功\n"
+                  CONFLICT_FILES="${CONFLICT_FILES}文件: ${pattern}\n"
+                  CONFLICT_SUMMARY="${CONFLICT_SUMMARY}✅ 文件 ${pattern} 补丁应用成功\n"
                 else
                   echo "⚠️ 补丁应用失败: $pattern"
                   # 检查文件在main分支是否存在
@@ -186,14 +182,14 @@ jobs:
                     # 使用main版本
                     git checkout main -- "$pattern"
                     
-                    CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
-                    CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 存在差异，已生成对比文件 ${backup_name}\n"
+                    CONFLICT_FILES="${CONFLICT_FILES}文件: ${pattern}\n"
+                    CONFLICT_SUMMARY="${CONFLICT_SUMMARY}⚠️ 文件 ${pattern} 存在差异，已生成对比文件: ${backup_name}\n"
                   else
                     echo "📄 文件在main分支不存在，保留custom-dev版本"
                     git checkout custom-dev -- "$pattern"
                     
-                    CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
-                    CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 在main分支不存在，保留custom-dev版本\n"
+                    CONFLICT_FILES="${CONFLICT_FILES}文件: ${pattern}\n"
+                    CONFLICT_SUMMARY="${CONFLICT_SUMMARY}ℹ️ 文件 ${pattern} 在main分支不存在，保留custom-dev版本\n"
                   fi
                 fi
               fi
@@ -263,6 +259,18 @@ jobs:
             ## 处理结果
             \`\`\`
             ${process.env.CONFLICT_SUMMARY || '没有处理结果记录'}
+            \`\`\`
+            
+            ## 生成的备份文件
+            以下文件已生成备份（.merge.bak）：
+            \`\`\`
+            ${process.env.CONFLICT_FILES?.split('\n')
+              .filter(file => file.trim())
+              .map(file => {
+                const bakFile = `${file}.${new Date().toISOString().slice(0,10).replace(/-/g, '')}_*.merge.bak`;
+                return `- ${file} -> ${bakFile}`;
+              })
+              .join('\n') || '没有生成备份文件'}
             \`\`\`
             
             ## 处理说明
