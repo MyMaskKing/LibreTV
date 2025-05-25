@@ -850,7 +850,6 @@ class SyncManager {
     
     // 定义重要键列表 - 这些键的变化会立即触发同步
     const importantKeys = [
-      'viewingHistory',    // 观看历史
       'currentPlayingId',  // 当前播放ID
       'selectedAPIs',      // 选中的API
       'yellowFilterEnabled', // 黄色内容过滤设置
@@ -861,6 +860,55 @@ class SyncManager {
       // 检查键值是否变化
       if (currentData[key] !== this.lastSyncDataSnapshot[key]) {
         changedKeys.push(key);
+        
+        // 特殊处理观看历史
+        if (key === 'viewingHistory') {
+          try {
+            // 尝试解析观看历史数据
+            const currentHistory = JSON.parse(currentData[key] || '[]');
+            const lastHistory = JSON.parse(this.lastSyncDataSnapshot[key] || '[]');
+            
+            // 如果记录数量不同，需要同步
+            if (currentHistory.length !== lastHistory.length) {
+              console.log(`观看历史记录数量变化，需要同步`);
+              return true;
+            }
+            
+            // 检查是否只有最近的记录发生了变化
+            if (currentHistory.length > 0 && lastHistory.length > 0) {
+              // 比较每条记录的关键信息（不比较进度）
+              let hasStructuralChanges = false;
+              
+              for (let i = 0; i < currentHistory.length; i++) {
+                const currentItem = currentHistory[i];
+                const lastItem = lastHistory[i];
+                
+                // 比较关键标识符，忽略进度变化
+                if (currentItem.showIdentifier !== lastItem.showIdentifier ||
+                    currentItem.episodeIndex !== lastItem.episodeIndex ||
+                    currentItem.url !== lastItem.url) {
+                  console.log(`观看历史第${i+1}条记录的剧集信息已变化，需要同步`);
+                  hasStructuralChanges = true;
+                  break;
+                }
+              }
+              
+              if (hasStructuralChanges) {
+                return true;
+              }
+            }
+            
+            // 如果只是进度变化，不触发同步
+            console.log(`观看历史仅有播放进度变化，不触发同步`);
+            changedKeys.pop(); // 从变化列表中移除
+            continue;
+            
+          } catch (e) {
+            console.error(`解析观看历史数据失败:`, e);
+            // 解析失败时，保守处理，同步变化
+            return true;
+          }
+        }
         
         // 检查是否是重要键或其前缀
         const isImportantKey = importantKeys.some(importantKey => 
