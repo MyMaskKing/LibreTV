@@ -209,13 +209,15 @@ jobs:
           
           # 如果有冲突文件，设置环境变量用于创建Issue
           if [ ! -z "$CONFLICT_FILES" ]; then
-            echo "CONFLICT_FILES<<EOF" >> $GITHUB_ENV
-            echo -e "$CONFLICT_FILES" >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
-            
-            echo "CONFLICT_SUMMARY<<EOF" >> $GITHUB_ENV
-            echo -e "$CONFLICT_SUMMARY" >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
+            {
+              echo 'HAS_CONFLICTS=true'
+              echo 'CONFLICT_FILES<<EOFCF'
+              echo -e "$CONFLICT_FILES"
+              echo 'EOFCF'
+              echo 'CONFLICT_SUMMARY<<EOFCS'
+              echo -e "$CONFLICT_SUMMARY"
+              echo 'EOFCS'
+            } >> $GITHUB_ENV
             
             echo "📋 检测到修改的文件，将创建Issue报告..."
           fi
@@ -223,11 +225,13 @@ jobs:
           echo "✅ 同步完成"
 
       - name: 创建Issue报告
-        if: env.CONFLICT_FILES
+        if: env.HAS_CONFLICTS == 'true'
         uses: actions/github-script@v6
         with:
           script: |
             console.log('📝 正在创建同步报告...');
+            console.log('冲突文件列表:', process.env.CONFLICT_FILES);
+            console.log('处理结果:', process.env.CONFLICT_SUMMARY);
             
             const issueBody = `
             # main -> custom-dev 同步报告
@@ -236,12 +240,12 @@ jobs:
             
             ## 处理的文件列表
             \`\`\`
-            ${process.env.CONFLICT_FILES}
+            ${process.env.CONFLICT_FILES || '没有检测到冲突文件'}
             \`\`\`
             
             ## 处理结果
             \`\`\`
-            ${process.env.CONFLICT_SUMMARY}
+            ${process.env.CONFLICT_SUMMARY || '没有处理结果记录'}
             \`\`\`
             
             ## 处理说明
