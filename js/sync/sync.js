@@ -875,7 +875,7 @@ class SyncManager {
                 // 比较关键标识符，忽略进度变化
                 if (currentItem.showIdentifier !== lastItem.showIdentifier ||
                     currentItem.episodeIndex !== lastItem.episodeIndex ||
-                    currentItem.url !== lastItem.url) {
+                    !this.compareUrlsIgnoringPosition(currentItem.url, lastItem.url)) {
                   console.log(`观看历史第${i+1}条记录的剧集信息已变化，需要同步`);
                   
                   // 记录具体变化的内容
@@ -887,8 +887,8 @@ class SyncManager {
                     console.log(`集数索引变化: ${lastItem.episodeIndex} -> ${currentItem.episodeIndex}`);
                   }
                   
-                  if (currentItem.url !== lastItem.url) {
-                    console.log(`视频URL变化: 
+                  if (!this.compareUrlsIgnoringPosition(currentItem.url, lastItem.url)) {
+                    console.log(`视频URL变化(忽略进度): 
                     旧: ${lastItem.url}
                     新: ${currentItem.url}`);
                   }
@@ -1786,6 +1786,60 @@ class SyncManager {
       
       console.log('定期清理任务完成');
     }, 60 * 60 * 1000); // 1小时
+  }
+
+  // 比较URL，忽略URL中的position参数
+  compareUrlsIgnoringPosition(url1, url2) {
+    if (!url1 || !url2) return url1 === url2;
+    
+    try {
+      // 处理相对URL
+      const fullUrl1 = url1.startsWith('http') ? url1 : (window.location.origin + '/' + url1.replace(/^\//, ''));
+      const fullUrl2 = url2.startsWith('http') ? url2 : (window.location.origin + '/' + url2.replace(/^\//, ''));
+      
+      // 解析URL和查询参数
+      const getUrlWithoutPosition = (urlString) => {
+        // 如果是播放器URL，特殊处理查询参数
+        if (urlString.includes('player.html')) {
+          const [base, query] = urlString.split('?');
+          if (!query) return base;
+          
+          const params = new URLSearchParams(query);
+          // 移除position参数
+          params.delete('position');
+          return base + '?' + params.toString();
+        }
+        
+        // 其他URL，尝试解析并移除position参数
+        try {
+          const url = new URL(urlString);
+          url.searchParams.delete('position');
+          return url.toString();
+        } catch (e) {
+          return urlString; // 解析失败则返回原始URL
+        }
+      };
+      
+      const normalizedUrl1 = getUrlWithoutPosition(fullUrl1);
+      const normalizedUrl2 = getUrlWithoutPosition(fullUrl2);
+      
+      const areEqual = normalizedUrl1 === normalizedUrl2;
+      
+      // 添加调试日志
+      if (!areEqual) {
+        console.log(`URL比较结果: 不相等
+        URL1(忽略进度): ${normalizedUrl1}
+        URL2(忽略进度): ${normalizedUrl2}`);
+      } else {
+        console.log(`URL比较结果: 相等 (仅进度参数不同)`);
+      }
+      
+      return areEqual;
+    } catch (e) {
+      console.error('比较URL时出错:', e);
+      // 出错时回退到简单字符串比较
+      return url1 === url2;
+    }
   }
 }
 
