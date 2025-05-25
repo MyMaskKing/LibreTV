@@ -208,6 +208,13 @@ jobs:
           
           # 如果有冲突文件，设置环境变量用于创建Issue
           if [ ! -z "$CONFLICT_FILES" ]; then
+            # 输出调试信息
+            echo "DEBUG: 准备设置环境变量，当前变量内容："
+            echo "DEBUG: CONFLICT_FILES 的值:"
+            echo -e "$CONFLICT_FILES"
+            echo "DEBUG: CONFLICT_SUMMARY 的值:"
+            echo -e "$CONFLICT_SUMMARY"
+            
             {
               echo "HAS_CONFLICTS=true"
               echo "CONFLICT_FILES<<EOFCF"
@@ -218,15 +225,9 @@ jobs:
               echo "EOFCS"
             } >> "$GITHUB_ENV"
             
-            # 输出调试信息
-            echo "DEBUG: 设置的环境变量内容："
-            echo "HAS_CONFLICTS=true"
-            echo "CONFLICT_FILES:"
-            echo -e "$CONFLICT_FILES"
-            echo "CONFLICT_SUMMARY:"
-            echo -e "$CONFLICT_SUMMARY"
-            
             echo "📋 检测到修改的文件，将创建Issue报告..."
+          else
+            echo "DEBUG: CONFLICT_FILES 为空，不创建Issue"
           fi
           
           echo "✅ 同步完成"
