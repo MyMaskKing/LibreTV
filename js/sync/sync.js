@@ -889,8 +889,8 @@ class SyncManager {
                   
                   if (currentItem.url !== lastItem.url) {
                     console.log(`视频URL变化: 
-                    旧: ${lastItem.url?.substring(0, 50)}...
-                    新: ${currentItem.url?.substring(0, 50)}...`);
+                    旧: ${lastItem.url}
+                    新: ${currentItem.url}`);
                   }
                   
                   hasStructuralChanges = true;
