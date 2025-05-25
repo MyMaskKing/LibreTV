@@ -38,8 +38,8 @@ const SYNC_BLACKLIST_PREFIXES = [
 const SYNC_LOCK_CONFIG = {
   lockKey: 'syncLock',
   lockTimeKey: 'syncLockTimestamp',
-  lockTimeout: 60000, // 锁超时时间，60秒
-  heartbeatInterval: 10000 // 心跳间隔，10秒
+  lockTimeout: 120000, // 锁超时时间，增加到120秒
+  heartbeatInterval: 30000 // 心跳间隔，增加到30秒
 };
 
 // WebDAV 客户端
@@ -184,6 +184,9 @@ class SyncManager {
     // 检查当前页面类型
     this.isSettingsPage = this.checkIsSettingsPage();
     
+    // 上次同步的数据快照
+    this.lastSyncDataSnapshot = null;
+    
     // 初始化
     this.initSyncStatusIcon();
     this.addStyles();
@@ -289,21 +292,29 @@ class SyncManager {
         
       case 'lockAcquired':
         // 其他页面获取了锁，更新本地状态
-        console.log(`页面 ${message.pageId} 获取了同步锁`);
+        if (message.pageId !== this.pageId) {
+          console.log(`页面 ${message.pageId} 获取了同步锁`);
+        }
         break;
         
       case 'lockReleased':
         // 锁被释放，可以尝试获取
-        console.log(`页面 ${message.pageId} 释放了同步锁`);
+        if (message.pageId !== this.pageId) {
+          console.log(`页面 ${message.pageId} 释放了同步锁`);
+        }
         break;
         
       case 'syncComplete':
         // 同步已完成，更新本地状态
-        console.log(`页面 ${message.pageId} 完成了同步操作`);
+        if (message.pageId !== this.pageId) {
+          console.log(`页面 ${message.pageId} 完成了同步操作`);
+        }
         // 更新最后同步时间
         if (message.lastSyncTime) {
           this.lastSyncTime = message.lastSyncTime;
           localStorage.setItem('lastSyncTime', this.lastSyncTime);
+          // 同步完成后，更新本地数据快照
+          this.updateDataSnapshot();
         }
         break;
     }
@@ -313,22 +324,49 @@ class SyncManager {
   async acquireSyncLock() {
     // 如果已经持有锁，直接返回成功
     if (this.isHoldingLock()) {
+      console.log(`页面 ${this.pageId} 已持有同步锁`);
       return true;
     }
     
     // 检查锁是否已过期
-    this.checkAndClearExpiredLock();
+    const lockCleared = this.checkAndClearExpiredLock();
     
     // 检查是否有其他页面持有锁
     const currentLock = localStorage.getItem(SYNC_LOCK_CONFIG.lockKey);
     if (currentLock && currentLock !== this.pageId) {
-      console.log(`同步锁被页面 ${currentLock} 持有，等待锁释放`);
+      const lockTimestamp = parseInt(localStorage.getItem(SYNC_LOCK_CONFIG.lockTimeKey) || '0');
+      const lockAge = Math.floor((Date.now() - lockTimestamp) / 1000);
+      console.log(`同步锁被页面 ${currentLock} 持有 (已持有${lockAge}秒)，等待锁释放`);
       return false;
+    }
+    
+    // 如果锁被清除了，添加随机延迟，避免多个页面同时尝试获取锁
+    if (lockCleared) {
+      // 随机延迟 0-1000ms
+      const randomDelay = Math.floor(Math.random() * 1000);
+      await new Promise(resolve => setTimeout(resolve, randomDelay));
+      
+      // 延迟后再次检查锁状态
+      const newLock = localStorage.getItem(SYNC_LOCK_CONFIG.lockKey);
+      if (newLock && newLock !== this.pageId) {
+        console.log(`延迟后发现锁已被页面 ${newLock} 获取，放弃获取锁`);
+        return false;
+      }
     }
     
     // 尝试获取锁
     localStorage.setItem(SYNC_LOCK_CONFIG.lockKey, this.pageId);
     localStorage.setItem(SYNC_LOCK_CONFIG.lockTimeKey, Date.now().toString());
+    
+    // 延迟检查，确保真的获取到了锁
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    // 再次检查锁状态
+    const finalLock = localStorage.getItem(SYNC_LOCK_CONFIG.lockKey);
+    if (finalLock !== this.pageId) {
+      console.log(`锁获取失败，当前锁被页面 ${finalLock} 持有`);
+      return false;
+    }
     
     // 广播已获取锁
     this.syncChannel.postMessage({
@@ -374,11 +412,17 @@ class SyncManager {
   // 检查并清除过期的锁
   checkAndClearExpiredLock() {
     const lockTimestamp = parseInt(localStorage.getItem(SYNC_LOCK_CONFIG.lockTimeKey) || '0');
+    const lockPageId = localStorage.getItem(SYNC_LOCK_CONFIG.lockKey);
     const now = Date.now();
+    
+    // 如果没有锁，直接返回
+    if (!lockPageId) {
+      return false;
+    }
     
     // 如果锁已过期，则清除
     if (now - lockTimestamp > SYNC_LOCK_CONFIG.lockTimeout) {
-      console.log('检测到过期的同步锁，正在清除');
+      console.log(`检测到过期的同步锁 (页面ID: ${lockPageId}, 超时: ${Math.floor((now - lockTimestamp)/1000)}秒)，正在清除`);
       localStorage.removeItem(SYNC_LOCK_CONFIG.lockKey);
       localStorage.removeItem(SYNC_LOCK_CONFIG.lockTimeKey);
       return true;
@@ -394,7 +438,15 @@ class SyncManager {
     
     // 设置新的心跳定时器
     this.lockHeartbeatTimer = setInterval(() => {
-      this.updateLockHeartbeat();
+      // 只有在真正持有锁时才更新心跳
+      if (this.isHoldingLock()) {
+        this.updateLockHeartbeat();
+        console.log(`页面 ${this.pageId} 更新了同步锁心跳`);
+      } else {
+        // 如果发现不再持有锁，停止心跳
+        console.log(`页面 ${this.pageId} 不再持有锁，停止心跳`);
+        this.stopLockHeartbeat();
+      }
     }, SYNC_LOCK_CONFIG.heartbeatInterval);
   }
   
@@ -682,12 +734,31 @@ class SyncManager {
       clearTimeout(this.syncDebounceTimer);
     }
 
+    // 添加时间间隔检查，避免频繁同步
+    const now = Date.now();
+    const lastSyncTime = parseInt(localStorage.getItem('lastSyncTime') || '0');
+    const minSyncInterval = 5 * 60 * 1000; // 最小同步间隔5分钟
+    
+    if (now - lastSyncTime < minSyncInterval) {
+      console.log(`距离上次同步时间不足${Math.floor(minSyncInterval/60000)}分钟，跳过同步`);
+      return;
+    }
+
     this.syncDebounceTimer = setTimeout(async () => {
-      if (this.syncInProgress) return;
+      if (this.syncInProgress) {
+        console.log('同步操作正在进行中，跳过此次同步');
+        return;
+      }
       
       // 检查页面是否活跃
       if (!this.isPageActive) {
         console.log('页面不活跃，跳过同步');
+        return;
+      }
+      
+      // 检查数据是否有变化
+      if (!this.hasDataChanged()) {
+        console.log('本地数据未发生变化，跳过同步');
         return;
       }
       
@@ -723,6 +794,9 @@ class SyncManager {
             pageId: this.pageId,
             lastSyncTime: this.lastSyncTime
           });
+          
+          // 更新数据快照
+          this.updateDataSnapshot();
         } else {
           this.updateSyncStatus('error');
           
@@ -743,6 +817,54 @@ class SyncManager {
     }, 3000); // 3秒防抖延迟
   }
 
+  // 检查数据是否有变化
+  hasDataChanged() {
+    // 如果是首次同步，没有上次同步的数据快照
+    if (!this.lastSyncDataSnapshot) {
+      this.updateDataSnapshot(); // 初始化数据快照
+      console.log('首次同步，已创建数据快照');
+      return false; // 首次不需要同步，等待真正的数据变化
+    }
+    
+    // 获取当前数据
+    const currentData = this.getAllLocalStorageData();
+    
+    // 比较数据
+    const currentDataKeys = Object.keys(currentData);
+    const lastDataKeys = Object.keys(this.lastSyncDataSnapshot);
+    
+    // 如果键的数量不同，说明有变化
+    if (currentDataKeys.length !== lastDataKeys.length) {
+      console.log('数据键数量发生变化，需要同步');
+      return true;
+    }
+    
+    // 比较每个键的值
+    let hasChanges = false;
+    let changedKeys = [];
+    
+    for (const key of currentDataKeys) {
+      if (currentData[key] !== this.lastSyncDataSnapshot[key]) {
+        changedKeys.push(key);
+        hasChanges = true;
+      }
+    }
+    
+    if (hasChanges) {
+      console.log(`检测到数据变化，变化的键: ${changedKeys.join(', ')}`);
+      return true;
+    }
+    
+    console.log('数据没有变化，不需要同步');
+    return false;
+  }
+  
+  // 更新数据快照
+  updateDataSnapshot() {
+    this.lastSyncDataSnapshot = this.getAllLocalStorageData();
+    console.log('数据快照已更新');
+  }
+
   // 处理 localStorage 变化
   handleStorageChange(event) {
     // 如果正在从云端同步到本地，则不处理本地数据变化
@@ -750,6 +872,9 @@ class SyncManager {
 
     // 检查是否是黑名单中的键
     if (this.isBlacklistedKey(event.key)) return;
+    
+    // 忽略lastSyncTime的变化，避免循环触发
+    if (event.key === 'lastSyncTime') return;
 
     // 确保 WebDAV 客户端已初始化
     if (!this.webdavClient && this.credentialId) {
@@ -985,6 +1110,7 @@ class SyncManager {
       
       // 确保持有同步锁
       if (!this.isHoldingLock()) {
+        console.log('未持有同步锁，尝试获取');
         const lockAcquired = await this.acquireSyncLock();
         if (!lockAcquired) {
           console.log('无法获取同步锁，跳过同步');
@@ -992,14 +1118,19 @@ class SyncManager {
         }
       }
 
+      console.log('开始执行同步到云端操作');
+      
       // 先测试连接
+      console.log('测试 WebDAV 连接...');
       const connected = await this.webdavClient.testConnection();
       if (!connected) {
         console.error('同步失败: WebDAV 连接测试失败');
         return false;
       }
+      console.log('WebDAV 连接测试成功');
 
       // 获取所有需要同步的数据
+      console.log('获取本地数据...');
       const localData = {
         data: this.getAllLocalStorageData(),
         timestamp: Date.now(),
@@ -1009,11 +1140,16 @@ class SyncManager {
       console.log('准备同步的完整数据:', localData);
 
       // 上传本地数据
+      console.log('开始上传数据到云端...');
       const success = await this.webdavClient.uploadData(localData);
       if (success) {
         this.lastSyncTime = Date.now();
         localStorage.setItem('lastSyncTime', this.lastSyncTime);
         console.log('同步成功，时间戳:', this.lastSyncTime);
+        
+        // 更新数据快照
+        this.updateDataSnapshot();
+        
         return true;
       }
 
@@ -1025,6 +1161,7 @@ class SyncManager {
     } finally {
       // 如果是由此方法获取的锁，则释放
       if (this.isHoldingLock()) {
+        console.log('同步完成，释放同步锁');
         this.releaseSyncLock();
       }
     }
@@ -1066,6 +1203,9 @@ class SyncManager {
       
       this.lastSyncTime = Date.now();
       localStorage.setItem('lastSyncTime', this.lastSyncTime);
+      
+      // 更新数据快照
+      this.updateDataSnapshot();
       
       console.log('从云端同步成功，时间戳:', this.lastSyncTime);
       if (showSuccessMessage) {
@@ -1259,18 +1399,41 @@ class SyncManager {
   // 启动自动同步
   startAutoSync() {
     this.stopAutoSync(); // 先停止现有的定时器
+    
+    // 创建初始数据快照
+    this.updateDataSnapshot();
+    console.log('已创建初始数据快照，自动同步已启动');
+    
     this.autoSyncTimer = setInterval(async () => {
-      if (this.syncEnabled && this.isPageActive) {
-        // 尝试获取同步锁
-        const lockAcquired = await this.acquireSyncLock();
-        if (lockAcquired) {
-          try {
-            await this.syncToCloud();
-          } finally {
-            // 释放同步锁
-            this.releaseSyncLock();
-          }
+      if (!this.syncEnabled) {
+        console.log('自动同步已禁用');
+        return;
+      }
+      
+      if (!this.isPageActive) {
+        console.log('页面不活跃，跳过自动同步');
+        return;
+      }
+      
+      // 检查数据是否有变化
+      if (!this.hasDataChanged()) {
+        console.log('定时同步：数据未变化，跳过同步');
+        return;
+      }
+      
+      console.log('定时同步：检测到数据变化，开始同步');
+      
+      // 尝试获取同步锁
+      const lockAcquired = await this.acquireSyncLock();
+      if (lockAcquired) {
+        try {
+          await this.syncToCloud();
+        } finally {
+          // 释放同步锁
+          this.releaseSyncLock();
         }
+      } else {
+        console.log('定时同步：无法获取同步锁，跳过同步');
       }
     }, this.syncInterval);
   }
@@ -1301,63 +1464,74 @@ class SyncManager {
         return;
       }
 
-      // 1. 初始化WebDAV客户端
-      const initSuccess = await this.init(credentialId);
-      if (!initSuccess) {
-        showToast('WebDAV 连接失败，请检查凭据ID', 'error');
-        return;
-      }
+      try {
+        console.log('开始初始化WebDAV客户端...');
+        // 1. 初始化WebDAV客户端
+        const initSuccess = await this.init(credentialId);
+        if (!initSuccess) {
+          showToast('WebDAV 连接失败，请检查凭据ID', 'error');
+          return;
+        }
+        console.log('WebDAV客户端初始化成功');
 
-      // 2. 检查云端数据
-      const cloudData = await this.webdavClient.downloadData();
-      
-      // 3. 启用同步
-      this.syncEnabled = true;
-      localStorage.setItem('cloudSyncEnabled', 'true');
-      localStorage.setItem('credentialId', this.credentialId);
-
-      if (cloudData) {
-        // 使用共通方法处理云端数据同步到本地
-        const syncSuccess = await this.syncDataFromCloudToLocal(cloudData, false);
+        // 2. 检查云端数据
+        console.log('检查云端数据...');
+        const cloudData = await this.webdavClient.downloadData();
         
-        if (syncSuccess) {
-          showToast('云同步已开启，数据已从云端同步', 'success');
+        // 3. 先启用同步设置
+        this.syncEnabled = true;
+        localStorage.setItem('cloudSyncEnabled', 'true');
+        localStorage.setItem('credentialId', this.credentialId);
+        console.log('云同步设置已启用');
+
+        if (cloudData) {
+          console.log('云端存在数据，尝试同步到本地...');
+          // 使用共通方法处理云端数据同步到本地
+          const syncSuccess = await this.syncDataFromCloudToLocal(cloudData, false);
           
-          // 刷新整个页面
-          setTimeout(() => {
-            window.location.reload();
-          }, 3000); // 延迟3秒后刷新，让用户看到成功提示
+          if (syncSuccess) {
+            showToast('云同步已开启，数据已从云端同步', 'success');
+            
+            // 刷新整个页面
+            setTimeout(() => {
+              window.location.reload();
+            }, 3000); // 延迟3秒后刷新，让用户看到成功提示
+          } else {
+            showToast('云同步已开启，但从云端同步数据失败', 'warning');
+          }
         } else {
-          showToast('云同步已开启，但从云端同步数据失败', 'warning');
-        }
-      } else {
-        // 云端没有数据，同步本地数据到云端
-        const localData = {
-          data: this.getAllLocalStorageData(),
-          timestamp: Date.now(),
-          credentialId: this.credentialId
-        };
+          console.log('云端没有数据，准备上传本地数据...');
+          // 云端没有数据，同步本地数据到云端
+          // 先创建数据快照
+          this.updateDataSnapshot();
+          
+          const localData = {
+            data: this.getAllLocalStorageData(),
+            timestamp: Date.now(),
+            credentialId: this.credentialId
+          };
 
-        const uploadSuccess = await this.webdavClient.uploadData(localData);
-        if (uploadSuccess) {
-          this.lastSyncTime = Date.now();
-          localStorage.setItem('lastSyncTime', this.lastSyncTime);
-          showToast('云同步已开启，本地数据已同步到云端', 'success');
-        } else {
-          showToast('云同步已开启，但同步到云端失败', 'warning');
+          console.log('准备上传本地数据到云端...');
+          const uploadSuccess = await this.webdavClient.uploadData(localData);
+          if (uploadSuccess) {
+            this.lastSyncTime = Date.now();
+            localStorage.setItem('lastSyncTime', this.lastSyncTime);
+            showToast('云同步已开启，本地数据已同步到云端', 'success');
+          } else {
+            showToast('云同步已开启，但同步到云端失败', 'warning');
+          }
         }
+
+        // 启动定时同步
+        this.startAutoSync();
+        console.log('自动同步已启动');
+      } finally {
+        // 释放同步锁
+        this.releaseSyncLock();
       }
-
-      // 启动定时同步
-      this.startAutoSync();
     } catch (error) {
       console.error('开启云同步失败:', error);
       throw error;
-    } finally {
-      // 释放同步锁
-      if (this.isHoldingLock()) {
-        this.releaseSyncLock();
-      }
     }
   }
 
