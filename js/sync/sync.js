@@ -183,6 +183,12 @@ class SyncManager {
     this.manualSyncBtn = null; // 添加手动同步按钮引用
     this.isManualSync = false;
     
+    // 节流控制相关变量
+    this.lastStorageEventTime = 0;
+    this.storageEventThrottleDelay = 3000; // 节流延迟，3秒内只处理一次同一键的变化
+    this.lastHandledKeys = {}; // 记录每个键最后处理的时间
+    this.ignoredEventCount = 0; // 记录被忽略的事件数量
+    
     // 页面标识
     this.pageId = this.generatePageId();
     
@@ -214,6 +220,9 @@ class SyncManager {
     
     // 设置页面可见性监听
     this.setupVisibilityListener();
+    
+    // 设置定期清理，每小时清理一次缓存的处理记录
+    this.setupPeriodicCleanup();
     
     console.log(`SyncManager实例已初始化，页面ID: ${this.pageId}`);
   }
@@ -262,23 +271,43 @@ class SyncManager {
 
   // 设置事件监听器
   setupEventListeners() {
+    // 检查实例是否已禁用
+    if (this.isDisabled) return;
+    
     // 监听 localStorage 变化
     window.addEventListener('storage', this.handleStorageChange.bind(this));
     
     // 监听同步通道消息
     this.syncChannel.addEventListener('message', this.handleSyncMessage.bind(this));
     
-    // 重写 localStorage 的 setItem 方法
+    // 重写 localStorage 的 setItem 方法，添加节流控制
     const originalSetItem = localStorage.setItem;
-    localStorage.setItem = (key, value) => {
+    const self = this;
+    
+    localStorage.setItem = function(key, value) {
+      // 检查是否是被忽略的键（与isBlacklistedKey保持一致）
+      const isIgnoredKey = SYNC_BLACKLIST.includes(key) || 
+                           SYNC_BLACKLIST_PREFIXES.some(prefix => key.startsWith(prefix)) ||
+                           key === 'lastSyncTime' || 
+                           key === SYNC_LOCK_CONFIG.lockKey || 
+                           key === SYNC_LOCK_CONFIG.lockTimeKey;
+      
+      // 获取旧值
+      const oldValue = localStorage.getItem(key);
+      
       // 调用原始的 setItem 方法
       originalSetItem.call(localStorage, key, value);
+      
+      // 如果值没有变化或是被忽略的键，不触发事件
+      if (oldValue === value || isIgnoredKey || self.isDisabled || self.isSyncingFromCloud) {
+        return;
+      }
       
       // 创建自定义事件
       const event = new StorageEvent('storage', {
         key: key,
         newValue: value,
-        oldValue: localStorage.getItem(key),
+        oldValue: oldValue,
         storageArea: localStorage,
         url: window.location.href
       });
@@ -819,7 +848,7 @@ class SyncManager {
         // 释放同步锁
         this.releaseSyncLock();
       }
-    }, 3000); // 3秒防抖延迟
+    }, 5000); // 增加到5秒防抖延迟，给用户更多时间批量操作
   }
 
   // 检查数据是否有变化
@@ -956,6 +985,32 @@ class SyncManager {
     // 增加对syncLock相关键的忽略
     if (event.key === SYNC_LOCK_CONFIG.lockKey || event.key === SYNC_LOCK_CONFIG.lockTimeKey) return;
 
+    // 节流控制 - 检查上次处理同一个键的时间
+    const now = Date.now();
+    const lastHandledTime = this.lastHandledKeys[event.key] || 0;
+    
+    // 如果同一个键在短时间内频繁变化，只处理一次
+    if (now - lastHandledTime < this.storageEventThrottleDelay) {
+      // 对于viewingHistory键，总是忽略频繁变化
+      if (event.key === 'viewingHistory') {
+        this.ignoredEventCount++;
+        // 每忽略10次事件，记录一次日志
+        if (this.ignoredEventCount % 10 === 0) {
+          console.log(`已忽略${this.ignoredEventCount}次频繁的viewingHistory变化事件`);
+        }
+        return;
+      }
+      
+      // 对于其他键，也进行节流，但阈值可以更低
+      if (now - lastHandledTime < 1000) { // 其他键1秒内只处理一次
+        console.log(`忽略键${event.key}的频繁变化事件，与上次处理间隔: ${now - lastHandledTime}ms`);
+        return;
+      }
+    }
+    
+    // 更新该键最后处理时间
+    this.lastHandledKeys[event.key] = now;
+    
     console.log(`检测到键 ${event.key} 变化，准备同步`);
 
     // 确保 WebDAV 客户端已初始化
@@ -1730,6 +1785,26 @@ class SyncManager {
     formatted = formatted.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color:#4f46e5;text-decoration:underline;">$1</a>');
     
     return formatted;
+  }
+
+  // 设置定期清理
+  setupPeriodicCleanup() {
+    if (this.isDisabled) return;
+    
+    // 每小时清理一次
+    setInterval(() => {
+      if (!this.isPageActive) return;
+      
+      // 清理节流控制记录
+      console.log('执行定期清理任务...');
+      this.lastHandledKeys = {};
+      this.ignoredEventCount = 0;
+      
+      // 检查并清理过期锁
+      this.checkAndClearExpiredLock();
+      
+      console.log('定期清理任务完成');
+    }, 60 * 60 * 1000); // 1小时
   }
 }
 
