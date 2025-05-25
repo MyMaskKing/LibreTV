@@ -182,7 +182,9 @@ class SyncManager {
     // 设置定期清理，每小时清理一次缓存的处理记录
     this.setupPeriodicCleanup();
     
-    console.log(`SyncManager实例已初始化，页面ID: ${this.pageId}`);
+    // 页面加载后立即创建初始数据快照
+    this.updateDataSnapshot();
+    console.log(`SyncManager实例已初始化，页面ID: ${this.pageId}，初始数据快照已创建`);
   }
   
   // 检查当前页面是否为设置页面
@@ -886,7 +888,7 @@ class SyncManager {
             }
             
             // 如果只是进度变化，不触发同步
-            console.log(`观看历史仅有播放进度变化，不触发同步【当前历史：${currentHistory}，上次历史：${lastHistory}】`);
+            console.log(`观看历史仅有播放进度变化，不触发同步`);
             changedKeys.pop(); // 从变化列表中移除
             continue;
             
@@ -1260,13 +1262,14 @@ class SyncManager {
       if (cloudData.data) {
         console.log('正在应用云端数据...');
         this.applyCloudData(cloudData.data);
+        
+        // 更新数据快照，确保快照是基于云端数据的
+        console.log('应用云端数据后立即更新数据快照');
+        this.updateDataSnapshot();
       }
       
       this.lastSyncTime = Date.now();
       localStorage.setItem('lastSyncTime', this.lastSyncTime);
-      
-      // 更新数据快照
-      this.updateDataSnapshot();
       
       console.log('从云端同步成功，时间戳:', this.lastSyncTime);
       if (showSuccessMessage) {
@@ -1467,9 +1470,8 @@ class SyncManager {
     
     this.stopAutoSync(); // 先停止现有的定时器
     
-    // 创建初始数据快照
-    this.updateDataSnapshot();
-    console.log('已创建初始数据快照，自动同步已启动');
+    // 数据快照已在构造函数中创建，这里不再需要重复创建
+    console.log('自动同步已启动');
     
     this.autoSyncTimer = setInterval(async () => {
       if (!this.syncEnabled) {
@@ -1566,6 +1568,10 @@ class SyncManager {
           const syncSuccess = await this.syncDataFromCloudToLocal(cloudData, false);
           
           if (syncSuccess) {
+            // 确保数据快照是基于云端数据的
+            console.log('从云端同步成功，更新数据快照');
+            this.updateDataSnapshot();
+            
             showToast('云同步已开启，数据已从云端同步', 'success');
             
             // 刷新整个页面
@@ -1578,8 +1584,9 @@ class SyncManager {
         } else {
           console.log('云端没有数据，准备上传本地数据...');
           // 云端没有数据，同步本地数据到云端
-          // 先创建数据快照
+          // 确保数据快照已更新为当前本地数据
           this.updateDataSnapshot();
+          console.log('已更新本地数据快照，准备上传到云端');
           
           const localData = {
             data: this.getAllLocalStorageData(),
