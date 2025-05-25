@@ -31,7 +31,8 @@ const SYNC_BLACKLIST = [
 const SYNC_BLACKLIST_PREFIXES = [
   '_temp',           // 临时数据前缀
   'debug_',          // 调试数据前缀
-  'temp_'            // 临时数据前缀
+  'temp_',           // 临时数据前缀
+  'videoProgress_'   // 视频进度前缀，不再同步视频进度数据
 ];
 
 // 同步锁配置
@@ -159,6 +160,17 @@ class WebDAVClient {
 // 同步管理器
 class SyncManager {
   constructor() {
+    // 检查是否已存在实例，防止多个标签页/iframe中重复初始化
+    if (window.syncManagerInitialized) {
+      console.log('检测到SyncManager已在其他框架中初始化，本实例将不执行同步操作');
+      this.isDisabled = true;
+      return;
+    }
+    
+    // 标记SyncManager已初始化
+    window.syncManagerInitialized = true;
+    this.isDisabled = false;
+    
     this.syncEnabled = localStorage.getItem('cloudSyncEnabled') === 'true';
     this.isSyncingFromCloud = false;
     this.webdavClient = null;
@@ -202,6 +214,8 @@ class SyncManager {
     
     // 设置页面可见性监听
     this.setupVisibilityListener();
+    
+    console.log(`SyncManager实例已初始化，页面ID: ${this.pageId}`);
   }
   
   // 检查当前页面是否为设置页面
@@ -276,6 +290,9 @@ class SyncManager {
   
   // 处理同步通道消息
   handleSyncMessage(event) {
+    // 检查实例是否已禁用
+    if (this.isDisabled) return;
+    
     const message = event.data;
     
     switch (message.type) {
@@ -322,6 +339,9 @@ class SyncManager {
   
   // 尝试获取同步锁
   async acquireSyncLock() {
+    // 检查实例是否已禁用
+    if (this.isDisabled) return false;
+    
     // 如果已经持有锁，直接返回成功
     if (this.isHoldingLock()) {
       console.log(`页面 ${this.pageId} 已持有同步锁`);
@@ -730,6 +750,9 @@ class SyncManager {
 
   // 防抖处理同步
   debouncedSync() {
+    // 检查实例是否已禁用
+    if (this.isDisabled) return;
+    
     if (this.syncDebounceTimer) {
       clearTimeout(this.syncDebounceTimer);
     }
@@ -764,7 +787,6 @@ class SyncManager {
         this.syncInProgress = true;
         this.updateSyncStatus('syncing');
         
-
         // 确保 WebDAV 客户端已初始化
         if (!this.webdavClient && this.credentialId) {
           this.webdavClient = new WebDAVClient(this.credentialId);
@@ -829,7 +851,6 @@ class SyncManager {
     // 定义重要键列表 - 这些键的变化会立即触发同步
     const importantKeys = [
       'viewingHistory',    // 观看历史
-      'videoProgress_',    // 视频进度
       'currentPlayingId',  // 当前播放ID
       'selectedAPIs',      // 选中的API
       'yellowFilterEnabled', // 黄色内容过滤设置
@@ -872,6 +893,9 @@ class SyncManager {
 
   // 处理 localStorage 变化
   handleStorageChange(event) {
+    // 检查实例是否已禁用
+    if (this.isDisabled) return;
+    
     // 如果正在从云端同步到本地，则不处理本地数据变化
     if (this.isSyncingFromCloud || !this.syncEnabled) return;
 
@@ -880,6 +904,9 @@ class SyncManager {
     
     // 忽略lastSyncTime的变化，避免循环触发
     if (event.key === 'lastSyncTime') return;
+    
+    // 增加对syncLock相关键的忽略
+    if (event.key === SYNC_LOCK_CONFIG.lockKey || event.key === SYNC_LOCK_CONFIG.lockTimeKey) return;
 
     console.log(`检测到键 ${event.key} 变化，准备同步`);
 
@@ -1055,6 +1082,9 @@ class SyncManager {
 
   // 同步到云端
   async syncToCloud(isAutoSync = false) {
+    // 检查实例是否已禁用
+    if (this.isDisabled) return false;
+    
     if (!this.syncEnabled || !this.webdavClient) {
       console.error('同步失败: 同步未启用或 WebDAV 客户端未初始化');
       return false;
@@ -1190,6 +1220,9 @@ class SyncManager {
 
   // 从云端同步
   async syncFromCloud() {
+    // 检查实例是否已禁用
+    if (this.isDisabled) return false;
+    
     if (!this.webdavClient) {
       console.error('从云端同步失败: WebDAV 客户端未初始化');
       showToast('WebDAV 客户端未初始化，请确保已正确设置凭据ID', 'error');
@@ -1368,6 +1401,9 @@ class SyncManager {
 
   // 启动自动同步
   startAutoSync() {
+    // 检查实例是否已禁用
+    if (this.isDisabled) return;
+    
     this.stopAutoSync(); // 先停止现有的定时器
     
     // 创建初始数据快照
@@ -1651,11 +1687,35 @@ class SyncManager {
 
 // 创建全局同步管理器实例
 // 修改为在DOM加载完成后初始化
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
+function initGlobalSyncManager() {
+  try {
+    if (window.syncManager) {
+      console.log('SyncManager已初始化，跳过重复初始化');
+      return;
+    }
+    
+    // 检查是否是顶层窗口
+    const isTopWindow = window.self === window.top;
+    // 如果是在iframe中运行，且不是设置页面，则不初始化同步管理器
+    if (!isTopWindow) {
+      const currentPath = window.location.pathname;
+      // 只允许主页面或设置页面初始化
+      if (!(currentPath === '/' || currentPath.endsWith('/index.html'))) {
+        console.log('当前页面在iframe中且非主页面，跳过SyncManager初始化');
+        return;
+      }
+    }
+    
     window.syncManager = new SyncManager();
-  });
+    console.log('全局SyncManager初始化完成');
+  } catch (error) {
+    console.error('初始化SyncManager时发生错误:', error);
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initGlobalSyncManager);
 } else {
   // 如果DOM已经加载完成，直接初始化
-  window.syncManager = new SyncManager();
+  initGlobalSyncManager();
 } 
