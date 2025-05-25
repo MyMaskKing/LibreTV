@@ -877,6 +877,22 @@ class SyncManager {
                     currentItem.episodeIndex !== lastItem.episodeIndex ||
                     currentItem.url !== lastItem.url) {
                   console.log(`观看历史第${i+1}条记录的剧集信息已变化，需要同步`);
+                  
+                  // 记录具体变化的内容
+                  if (currentItem.showIdentifier !== lastItem.showIdentifier) {
+                    console.log(`剧集标识符变化: "${lastItem.showIdentifier}" -> "${currentItem.showIdentifier}"`);
+                  }
+                  
+                  if (currentItem.episodeIndex !== lastItem.episodeIndex) {
+                    console.log(`集数索引变化: ${lastItem.episodeIndex} -> ${currentItem.episodeIndex}`);
+                  }
+                  
+                  if (currentItem.url !== lastItem.url) {
+                    console.log(`视频URL变化: 
+                    旧: ${lastItem.url?.substring(0, 50)}...
+                    新: ${currentItem.url?.substring(0, 50)}...`);
+                  }
+                  
                   hasStructuralChanges = true;
                   break;
                 }
