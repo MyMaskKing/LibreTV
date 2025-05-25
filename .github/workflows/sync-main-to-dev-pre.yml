@@ -265,18 +265,6 @@ jobs:
             ${process.env.CONFLICT_SUMMARY || '没有处理结果记录'}
             \`\`\`
             
-            ## 生成的备份文件
-            以下文件已生成备份（.merge.bak）：
-            \`\`\`
-            ${process.env.CONFLICT_FILES?.split('\n')
-              .filter(file => file.trim())
-              .map(file => {
-                const bakFile = `${file}.${new Date().toISOString().slice(0,10).replace(/-/g, '')}_*.merge.bak`;
-                return `- ${file} -> ${bakFile}`;
-              })
-              .join('\n') || '没有生成备份文件'}
-            \`\`\`
-            
             ## 处理说明
             1. 所有文件已更新到main分支版本
             2. 对于 sync-exclude.txt 中的目录：
