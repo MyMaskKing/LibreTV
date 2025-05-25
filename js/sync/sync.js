@@ -875,7 +875,7 @@ class SyncManager {
                 // 比较关键标识符，忽略进度变化
                 if (currentItem.showIdentifier !== lastItem.showIdentifier ||
                     currentItem.episodeIndex !== lastItem.episodeIndex ||
-                    !this.compareUrlsIgnoringPosition(currentItem.url, lastItem.url)) {
+                    currentItem.url !== lastItem.url) {
                   console.log(`观看历史第${i+1}条记录的剧集信息已变化，需要同步`);
                   
                   // 记录具体变化的内容
@@ -891,6 +891,7 @@ class SyncManager {
                     console.log(`视频URL变化(忽略进度): 
                     旧: ${lastItem.url}
                     新: ${currentItem.url}`);
+                    break;
                   }
                   
                   hasStructuralChanges = true;
@@ -1824,15 +1825,6 @@ class SyncManager {
       const normalizedUrl2 = getUrlWithoutPosition(fullUrl2);
       
       const areEqual = normalizedUrl1 === normalizedUrl2;
-      
-      // 添加调试日志
-      if (!areEqual) {
-        console.log(`URL比较结果: 不相等
-        URL1(忽略进度): ${normalizedUrl1}
-        URL2(忽略进度): ${normalizedUrl2}`);
-      } else {
-        console.log(`URL比较结果: 相等 (仅进度参数不同)`);
-      }
       
       return areEqual;
     } catch (e) {
