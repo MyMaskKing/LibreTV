@@ -86,7 +86,7 @@ jobs:
           rm -rf "$TEMP_PATCH_DIR"
           mkdir -p "$TEMP_PATCH_DIR"
           
-          # 创建冲突文件列表和处理结果
+          # 创建冲突文件列表
           CONFLICT_FILES=""
           CONFLICT_SUMMARY=""
           
@@ -102,12 +102,18 @@ jobs:
               if [ -d "$pattern" ]; then
                 echo "💾 备份目录: $pattern"
                 cp -r "$pattern" "$TEMP_PATCH_DIR/"
+                # 记录目录处理
+                CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
+                CONFLICT_SUMMARY="${CONFLICT_SUMMARY}目录 ${pattern} 已备份\n"
               fi
             else
               # 是文件
               if [ -f "$pattern" ]; then
                 echo "📝 创建补丁: $pattern"
                 git diff main...custom-dev -- "$pattern" > "$TEMP_PATCH_DIR/$(basename "$pattern").patch"
+                # 记录文件处理
+                CONFLICT_FILES="${CONFLICT_FILES}${pattern}\n"
+                CONFLICT_SUMMARY="${CONFLICT_SUMMARY}文件 ${pattern} 已创建补丁\n"
               fi
             fi
           done < <(echo "$EXCLUDE_PATTERNS")
@@ -152,7 +158,7 @@ jobs:
                   echo "⚠️ 补丁应用失败: $pattern"
                   # 检查文件在main分支是否存在
                   if git cat-file -e main:"$pattern" 2>/dev/null; then
-                    echo "📄 文件在main分支存在，使用mian版本，准备备份custom-dev版本"
+                    echo "📄 文件在main分支存在，使用main版本，准备备份custom-dev版本"
                     # 确保目录存在
                     mkdir -p "$(dirname "$pattern")"
                     
@@ -206,15 +212,15 @@ jobs:
           git commit -m "同步main分支代码，保留指定文件的custom-dev版本" || echo "没有需要提交的更改"
           git push --force origin custom-dev
           
+          # 输出调试信息
+          echo "DEBUG: 准备设置环境变量，当前变量内容："
+          echo "DEBUG: CONFLICT_FILES 的值:"
+          echo -e "$CONFLICT_FILES"
+          echo "DEBUG: CONFLICT_SUMMARY 的值:"
+          echo -e "$CONFLICT_SUMMARY"
+          
           # 如果有冲突文件，设置环境变量用于创建Issue
           if [ ! -z "$CONFLICT_FILES" ]; then
-            # 输出调试信息
-            echo "DEBUG: 准备设置环境变量，当前变量内容："
-            echo "DEBUG: CONFLICT_FILES 的值:"
-            echo -e "$CONFLICT_FILES"
-            echo "DEBUG: CONFLICT_SUMMARY 的值:"
-            echo -e "$CONFLICT_SUMMARY"
-            
             {
               echo "HAS_CONFLICTS=true"
               echo "CONFLICT_FILES<<EOFCF"
