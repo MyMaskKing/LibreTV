@@ -886,7 +886,7 @@ class SyncManager {
             }
             
             // 如果只是进度变化，不触发同步
-            console.log(`观看历史仅有播放进度变化，不触发同步`);
+            console.log(`观看历史仅有播放进度变化，不触发同步【当前历史：${currentHistory}，上次历史：${lastHistory}】`);
             changedKeys.pop(); // 从变化列表中移除
             continue;
             
