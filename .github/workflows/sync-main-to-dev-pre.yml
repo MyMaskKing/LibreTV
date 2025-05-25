@@ -102,14 +102,12 @@ jobs:
               if [ -d "$pattern" ]; then
                 echo "💾 备份目录: $pattern"
                 cp -r "$pattern" "$TEMP_PATCH_DIR/"
-                # 记录目录处理
               fi
             else
               # 是文件
               if [ -f "$pattern" ]; then
                 echo "📝 创建补丁: $pattern"
                 git diff main...custom-dev -- "$pattern" > "$TEMP_PATCH_DIR/$(basename "$pattern").patch"
-                # 记录文件处理
               fi
             fi
           done < <(echo "$EXCLUDE_PATTERNS")
@@ -119,7 +117,8 @@ jobs:
           git checkout main -- .
           
           # 然后处理 exclude 文件中的内容
-          echo "$EXCLUDE_PATTERNS" | while IFS= read -r pattern; do
+          HAS_CONFLICTS=false
+          while IFS= read -r pattern; do
             if [ -z "$pattern" ]; then
               continue
             fi
@@ -137,6 +136,7 @@ jobs:
                 if ! git diff --quiet HEAD -- "$pattern"; then
                   CONFLICT_FILES="${CONFLICT_FILES}目录: ${pattern}\n"
                   CONFLICT_SUMMARY="${CONFLICT_SUMMARY}✅ 目录 ${pattern} 直接使用custom-dev版本\n"
+                  HAS_CONFLICTS=true
                 fi
               fi
             else
@@ -150,6 +150,7 @@ jobs:
                   git apply --whitespace=fix "$TEMP_PATCH_DIR/$(basename "$pattern").patch"
                   CONFLICT_FILES="${CONFLICT_FILES}文件: ${pattern}\n"
                   CONFLICT_SUMMARY="${CONFLICT_SUMMARY}✅ 文件 ${pattern} 补丁应用成功\n"
+                  HAS_CONFLICTS=true
                 else
                   echo "⚠️ 补丁应用失败: $pattern"
                   # 检查文件在main分支是否存在
@@ -184,17 +185,19 @@ jobs:
                     
                     CONFLICT_FILES="${CONFLICT_FILES}文件: ${pattern}\n"
                     CONFLICT_SUMMARY="${CONFLICT_SUMMARY}⚠️ 文件 ${pattern} 存在差异，已生成对比文件: ${backup_name}\n"
+                    HAS_CONFLICTS=true
                   else
                     echo "📄 文件在main分支不存在，保留custom-dev版本"
                     git checkout custom-dev -- "$pattern"
                     
                     CONFLICT_FILES="${CONFLICT_FILES}文件: ${pattern}\n"
                     CONFLICT_SUMMARY="${CONFLICT_SUMMARY}ℹ️ 文件 ${pattern} 在main分支不存在，保留custom-dev版本\n"
+                    HAS_CONFLICTS=true
                   fi
                 fi
               fi
             fi
-          done
+          done < <(echo "$EXCLUDE_PATTERNS")
           
           # 清理临时文件
           rm -rf "$TEMP_PATCH_DIR"
@@ -210,13 +213,14 @@ jobs:
           
           # 输出调试信息
           echo "DEBUG: 准备设置环境变量，当前变量内容："
+          echo "DEBUG: HAS_CONFLICTS的值: $HAS_CONFLICTS"
           echo "DEBUG: CONFLICT_FILES 的值:"
           echo -e "$CONFLICT_FILES"
           echo "DEBUG: CONFLICT_SUMMARY 的值:"
           echo -e "$CONFLICT_SUMMARY"
           
           # 如果有冲突文件，设置环境变量用于创建Issue
-          if [ ! -z "$CONFLICT_FILES" ]; then
+          if [ "$HAS_CONFLICTS" = "true" ]; then
             {
               echo "HAS_CONFLICTS=true"
               echo "CONFLICT_FILES<<EOFCF"
@@ -229,7 +233,7 @@ jobs:
             
             echo "📋 检测到修改的文件，将创建Issue报告..."
           else
-            echo "DEBUG: CONFLICT_FILES 为空，不创建Issue"
+            echo "DEBUG: 没有检测到冲突文件，不创建Issue"
           fi
           
           echo "✅ 同步完成"
