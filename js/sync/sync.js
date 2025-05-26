@@ -887,14 +887,14 @@ class SyncManager {
                     console.log(`集数索引变化: ${lastItem.episodeIndex} -> ${currentItem.episodeIndex}`);
                   }
                   
+                  if (this.compareUrlsIgnoringPosition(currentItem.url, lastItem.url)) {
+                    continue;
+                  }
+
                   if (!this.compareUrlsIgnoringPosition(currentItem.url, lastItem.url)) {
                     console.log(`视频URL变化(忽略进度): 
                     旧: ${lastItem.url}
                     新: ${currentItem.url}`);
-                  }
-
-                  if (this.compareUrlsIgnoringPosition(currentItem.url, lastItem.url)) {
-                    break;
                   }
                   
                   hasStructuralChanges = true;
