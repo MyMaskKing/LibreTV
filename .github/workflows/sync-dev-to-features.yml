@@ -26,27 +26,95 @@ jobs:
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
       
-      - name: Force sync custom-dev to custom-features
+      - name: Sync custom-dev to custom-features without history
         run: |
           echo "🔄 开始同步流程..."
           
           # 获取最新代码
           git fetch origin
           
-          # 检查 custom-features 分支是否存在
-          if ! git show-ref --verify --quiet refs/remotes/origin/custom-features; then
-            echo "🌱 创建功能分支 custom-features..."
-            git checkout -b custom-features
-            git push -u origin custom-features
+          # 检查开发分支是否存在
+          if ! git show-ref --verify --quiet refs/remotes/origin/custom-dev; then
+            echo "❌ 错误：开发分支 custom-dev 不存在！"
+            exit 1
           fi
           
-          # 强制更新功能分支
-          echo "🔄 强制更新功能分支..."
-          git checkout custom-features
-          git reset --hard origin/custom-dev
-          git push -f origin custom-features
+          # 检查 custom-features 分支是否存在
+          FEATURES_EXISTS=$(git ls-remote --heads origin custom-features | wc -l)
           
-          echo "✅ 同步完成：已将 custom-dev 的内容强制同步到功能分支"
+          # 切换到开发分支获取最新内容
+          git checkout origin/custom-dev
+          
+          # 创建临时目录存放文件
+          mkdir -p /tmp/sync_content
+          
+          # 导出开发分支的内容到临时目录，不包括 .git 目录（不含提交历史）
+          git checkout-index -a -f --prefix=/tmp/sync_content/
+          
+          # 保存原始 .github 目录中的非 workflows 文件（如果存在）
+          if [ -d "/tmp/sync_content/.github" ]; then
+            mkdir -p /tmp/github_backup
+            find /tmp/sync_content/.github -type f -not -path "*/workflows/*" -exec cp --parents {} /tmp/github_backup \;
+          fi
+          
+          # 删除不需要同步的目录
+          echo "🗑️ 移除 .github/workflows 目录..."
+          rm -rf /tmp/sync_content/.github/workflows
+          
+          # 创建临时分支
+          if [ "$FEATURES_EXISTS" -eq "0" ]; then
+            echo "🌱 创建功能分支 custom-features..."
+            git checkout --orphan custom-features
+            # 清空工作区
+            git rm -rf .
+          else
+            echo "🔄 切换到现有功能分支..."
+            git checkout -B custom-features origin/custom-features --no-track
+            # 保存当前 .github/workflows 目录（如果存在）
+            if [ -d ".github/workflows" ]; then
+              mkdir -p /tmp/workflows_backup
+              cp -r .github/workflows/* /tmp/workflows_backup/
+            fi
+            # 清空分支内容但保留 .git 目录
+            git rm -rf .
+            git clean -fdx
+            mkdir -p .github
+          fi
+          
+          # 将临时目录内容复制到当前工作目录
+          echo "📋 复制内容到功能分支..."
+          cp -r /tmp/sync_content/. ./
+          
+          # 恢复 .github/workflows 目录（如果有备份）
+          if [ -d "/tmp/workflows_backup" ] && [ "$(ls -A /tmp/workflows_backup)" ]; then
+            echo "♻️ 恢复原有的 workflows 文件..."
+            mkdir -p .github/workflows
+            cp -r /tmp/workflows_backup/* .github/workflows/
+          fi
+          
+          # 恢复 .github 中的非 workflows 文件（如果有备份）
+          if [ -d "/tmp/github_backup/.github" ] && [ "$(ls -A /tmp/github_backup/.github)" ]; then
+            echo "♻️ 恢复 .github 中的非 workflows 文件..."
+            cp -r /tmp/github_backup/.github/* .github/
+          fi
+          
+          # 添加所有变更
+          git add .
+          
+          # 检查是否有变更需要提交
+          if git diff --staged --quiet; then
+            echo "⚠️ 没有检测到文件变更，跳过提交"
+          else
+            # 提交变更
+            echo "💾 提交同步的内容..."
+            git commit -m "🔄 从开发分支同步内容到功能分支 (不包含历史记录和workflows目录)"
+            
+            # 推送到远程
+            echo "⬆️ 推送到远程..."
+            git push -f origin custom-features
+          fi
+          
+          echo "✅ 同步完成：已将 custom-dev 的内容同步到功能分支（不含提交历史和workflows目录）"
       
       - name: Create issue on failure
         if: failure()
@@ -67,7 +135,7 @@ jobs:
             - 目标分支: \`custom-features\` (功能分支)
             
             ## 注意事项
-            这是强制同步操作，如果同步失败，请检查：
+            这是仅同步文件内容的操作（不含提交历史和workflows目录），如果同步失败，请检查：
             1. 是否有足够的权限
             2. 分支保护规则是否允许强制推送
             3. 网络连接是否正常
@@ -85,4 +153,4 @@ jobs:
         if: success()
         run: |
           echo "✅ 功能分支同步成功"
-          echo "custom-dev -> custom-features" 
+          echo "custom-dev -> custom-features（仅同步文件内容，不含提交历史和workflows目录）" 
