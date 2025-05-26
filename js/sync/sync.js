@@ -234,47 +234,127 @@ class SyncManager {
     // 检查实例是否已禁用
     if (this.isDisabled) return;
     
-    // 监听 localStorage 变化
+    // 监听 localStorage 变化（用于跨标签页通信）
     window.addEventListener('storage', this.handleStorageChange.bind(this));
     
     // 监听同步通道消息
     this.syncChannel.addEventListener('message', this.handleSyncMessage.bind(this));
     
-    // 重写 localStorage 的 setItem 方法，添加节流控制
+    // 创建一个 MutationObserver 来监视 DOM 变化
+    this._observer = new MutationObserver((mutations) => {
+      // 仅在页面可见时处理变化
+      if (!this.isPageActive) return;
+      
+      // 检查是否有需要同步的变化
+      if (this.hasDataChanged()) {
+        this.debouncedSync();
+      }
+    });
+    
+    // 开始观察 DOM 变化
+    this._observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true
+    });
+    
+    // 重写 localStorage 的 setItem 方法
     const originalSetItem = localStorage.setItem;
     const self = this;
     
-    localStorage.setItem = function(key, value) {
-      // 检查是否是被忽略的键（与isBlacklistedKey保持一致）
-      const isIgnoredKey = SYNC_BLACKLIST.includes(key) || 
+    try {
+      localStorage.setItem = function(key, value) {
+        // 安全检查：确保参数有效
+        if (typeof key !== 'string') {
+          console.error('localStorage.setItem: key must be a string');
+          return;
+        }
+        
+        // 获取旧值
+        let oldValue;
+        try {
+          oldValue = localStorage.getItem(key);
+        } catch (e) {
+          console.error('获取localStorage旧值失败:', e);
+          oldValue = null;
+        }
+        
+        // 调用原始的 setItem 方法
+        try {
+          originalSetItem.call(localStorage, key, value);
+        } catch (e) {
+          console.error('设置localStorage值失败:', e);
+          return;
+        }
+        
+        // 检查是否是被忽略的键
+        const isIgnoredKey = SYNC_BLACKLIST.includes(key) || 
                            SYNC_BLACKLIST_PREFIXES.some(prefix => key.startsWith(prefix)) ||
                            key === 'lastSyncTime' || 
                            key === SYNC_LOCK_CONFIG.lockKey || 
                            key === SYNC_LOCK_CONFIG.lockTimeKey;
-      
-      // 获取旧值
-      const oldValue = localStorage.getItem(key);
-      
-      // 调用原始的 setItem 方法
-      originalSetItem.call(localStorage, key, value);
-      
-      // 如果值没有变化或是被忽略的键，不触发事件
-      if (oldValue === value || isIgnoredKey || self.isDisabled || self.isSyncingFromCloud) {
-        return;
+        
+        // 如果值没有变化或是被忽略的键，不触发同步
+        if (oldValue === value || isIgnoredKey || self.isDisabled || self.isSyncingFromCloud) {
+          return;
+        }
+        
+        // 创建事件数据
+        const eventData = {
+          key: key,
+          newValue: value,
+          oldValue: oldValue,
+          storageArea: localStorage,
+          url: window.location.href,
+          timestamp: Date.now()
+        };
+        
+        // 直接调用处理方法，不再使用事件
+        if (self.isPageActive) {
+          try {
+            self.handleStorageChange(eventData);
+          } catch (e) {
+            console.error(`处理数据变化失败 (${key}):`, e);
+          }
+        }
+        
+        // 触发 storage 事件（用于其他标签页）
+        try {
+          const storageEvent = new StorageEvent('storage', eventData);
+          window.dispatchEvent(storageEvent);
+        } catch (e) {
+          console.error('触发storage事件失败:', e);
+        }
+      };
+    } catch (e) {
+      console.error('重写localStorage.setItem失败:', e);
+      localStorage.setItem = originalSetItem;
+    }
+    
+    // 添加页面卸载事件监听
+    window.addEventListener('beforeunload', () => {
+      // 停止观察 DOM 变化
+      if (this._observer) {
+        this._observer.disconnect();
       }
       
-      // 创建自定义事件
-      const event = new StorageEvent('storage', {
-        key: key,
-        newValue: value,
-        oldValue: oldValue,
-        storageArea: localStorage,
-        url: window.location.href
-      });
-      
-      // 触发事件
-      window.dispatchEvent(event);
-    };
+      // 如果有未同步的变化，尝试最后一次同步
+      if (this.hasDataChanged()) {
+        // 使用 sendBeacon API 确保数据发送
+        const syncData = {
+          data: this.getAllLocalStorageData(),
+          timestamp: Date.now(),
+          credentialId: this.credentialId
+        };
+        
+        try {
+          navigator.sendBeacon(this.webdavClient?.config?.url, JSON.stringify(syncData));
+        } catch (e) {
+          console.error('最终同步失败:', e);
+        }
+      }
+    });
   }
   
   // 处理同步通道消息
@@ -956,23 +1036,28 @@ class SyncManager {
     // 如果正在从云端同步到本地，则不处理本地数据变化
     if (this.isSyncingFromCloud || !this.syncEnabled) return;
 
+    // 获取事件数据
+    const key = event.key;
+    const newValue = event.newValue;
+    const oldValue = event.oldValue;
+    
     // 检查是否是黑名单中的键
-    if (this.isBlacklistedKey(event.key)) return;
+    if (this.isBlacklistedKey(key)) return;
     
     // 忽略lastSyncTime的变化，避免循环触发
-    if (event.key === 'lastSyncTime') return;
+    if (key === 'lastSyncTime') return;
     
     // 增加对syncLock相关键的忽略
-    if (event.key === SYNC_LOCK_CONFIG.lockKey || event.key === SYNC_LOCK_CONFIG.lockTimeKey) return;
+    if (key === SYNC_LOCK_CONFIG.lockKey || key === SYNC_LOCK_CONFIG.lockTimeKey) return;
 
     // 节流控制 - 检查上次处理同一个键的时间
     const now = Date.now();
-    const lastHandledTime = this.lastHandledKeys[event.key] || 0;
+    const lastHandledTime = this.lastHandledKeys[key] || 0;
     
     // 如果同一个键在短时间内频繁变化，只处理一次
     if (now - lastHandledTime < this.storageEventThrottleDelay) {
       // 对于viewingHistory键，总是忽略频繁变化
-      if (event.key === 'viewingHistory') {
+      if (key === 'viewingHistory') {
         this.ignoredEventCount++;
         // 每忽略10次事件，记录一次日志
         if (this.ignoredEventCount % 10 === 0) {
@@ -983,15 +1068,15 @@ class SyncManager {
       
       // 对于其他键，也进行节流，但阈值可以更低
       if (now - lastHandledTime < 1000) { // 其他键1秒内只处理一次
-        console.log(`忽略键${event.key}的频繁变化事件，与上次处理间隔: ${now - lastHandledTime}ms`);
+        console.log(`忽略键${key}的频繁变化事件，与上次处理间隔: ${now - lastHandledTime}ms`);
         return;
       }
     }
     
     // 更新该键最后处理时间
-    this.lastHandledKeys[event.key] = now;
+    this.lastHandledKeys[key] = now;
     
-    console.log(`检测到键 ${event.key} 变化，准备同步`);
+    console.log(`检测到键 ${key} 变化，准备同步`);
 
     // 确保 WebDAV 客户端已初始化
     if (!this.webdavClient && this.credentialId) {
